@@ -5197,7 +5197,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             } break;
         case GGML_OP_SET_ROWS:
             {
-                // turbo3 requires head_dim divisible by QK_TURBO3_GROUP (128); fall back otherwise
+                // turbo3 requires head_dim divisible by QK_TURBO3_GROUP (128)
                 if (op->type == GGML_TYPE_TURBO3_0 && op->src[0]->ne[0] % QK_TURBO3_GROUP != 0) {
                     return false;
                 }
@@ -5326,6 +5326,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_CLAMP:
         case GGML_OP_LOG:
             return true;
+        case GGML_OP_TURBO_WHT:
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                   op->src[0]->ne[0] % 128 == 0;  // head dim must be divisible by 128
         case GGML_OP_ADD:
         case GGML_OP_SUB:
         case GGML_OP_MUL:

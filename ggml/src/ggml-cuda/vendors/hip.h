@@ -125,6 +125,10 @@ typedef uint64_t ggml_cuda_thread_mask_t;
 #define cudaStreamPerThread hipStreamPerThread
 #define cudaStreamSynchronize hipStreamSynchronize
 #define cudaStreamWaitEvent hipStreamWaitEvent
+#define cudaMemcpyToSymbol hipMemcpyToSymbol
+#define cudaMemcpyFromSymbol hipMemcpyFromSymbol
+#define cudaMemcpyHostToDevice hipMemcpyHostToDevice
+#define cudaMemcpyDeviceToHost hipMemcpyDeviceToHost
 #define cudaGraphExec_t hipGraphExec_t
 #define cudaGraphNode_t hipGraphNode_t
 #define cudaKernelNodeParams hipKernelNodeParams
@@ -137,6 +141,9 @@ typedef uint64_t ggml_cuda_thread_mask_t;
 #define cudaGraphNodeTypeKernel hipGraphNodeTypeKernel
 #define cudaGraphInstantiate hipGraphInstantiate
 #define cudaStreamEndCapture hipStreamEndCapture
+#define cudaStreamCaptureStatus hipStreamCaptureStatus
+#define cudaStreamIsCapturing hipStreamIsCapturing
+#define cudaStreamCaptureStatusNone hipStreamCaptureStatusNone
 #define cudaGraphDestroy hipGraphDestroy
 #define cudaGraphKernelNodeSetParams hipGraphKernelNodeSetParams
 #define cudaErrorInvalidDeviceFunction hipErrorInvalidDeviceFunction

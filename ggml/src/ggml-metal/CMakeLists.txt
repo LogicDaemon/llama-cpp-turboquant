@@ -28,6 +28,9 @@ set(METALLIB_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/../ggml-common.h")
 set(METALLIB_KERNELS_COMMON     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/common.h")
 set(METALLIB_KERNELS_DEQUANTIZE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/dequantize.h")
 set(METALLIB_KERNELS_QUANTIZE   "${CMAKE_CURRENT_SOURCE_DIR}/kernels/quantize.h")
+set(METALLIB_KERNELS_TURBOQUANT "${CMAKE_CURRENT_SOURCE_DIR}/kernels/turboquant.h")
+set(METALLIB_KERNELS_TURBOQUANT_FA "${CMAKE_CURRENT_SOURCE_DIR}/kernels/turboquant-fa.h")
+set(METALLIB_TURBO_WHT          "${CMAKE_CURRENT_SOURCE_DIR}/turbo-wht.h")
 
 set(METALLIB_KERNEL_SOURCES
     kernels/fa.metal
@@ -44,6 +47,7 @@ set(METALLIB_KERNEL_SOURCES
     kernels/wkv.metal
     kernels/gated_delta_net.metal
     kernels/solve_tri.metal
+    kernels/turboquant.metal
     kernels/rope.metal
     kernels/conv.metal
     kernels/upscale.metal
@@ -81,13 +85,18 @@ if (GGML_METAL_EMBED_LIBRARY)
         if(_has_quantize)
             list(APPEND HEADERS_FOR_SRC ${METALLIB_KERNELS_QUANTIZE})
         endif()
+        file(STRINGS ${SRC} _has_turboquant REGEX "#include \"turboquant\\.h\"")
+        if(_has_turboquant)
+            list(APPEND HEADERS_FOR_SRC ${METALLIB_TURBO_WHT} ${METALLIB_KERNELS_TURBOQUANT})
+        endif()
+        file(STRINGS ${SRC} _has_turboquant_fa REGEX "#include \"turboquant-fa\\.h\"")
 
         add_custom_command(
             OUTPUT "${ASM}"
             # Step 1: concatenate shared headers + this kernel source
             COMMAND cat ${HEADERS_FOR_SRC} ${SRC} > "${EMBED}.tmp1"
             # Step 2: remove internal #include and #pragma once
-            COMMAND sed -e "/\#include \"common.h\"/d" -e "/\#include \"dequantize.h\"/d" -e "/\#include \"quantize.h\"/d" -e "/\#pragma once/d" < "${EMBED}.tmp1" > "${EMBED}.tmp2"
+            COMMAND sed -e "/\#include \"common.h\"/d" -e "/\#include \"dequantize.h\"/d" -e "/\#include \"quantize.h\"/d" -e "/\#include \"turboquant.h\"/d" -e "/\#include \"\.\.\/turbo-wht.h\"/d" -e "/\#include \"turboquant-fa.h\"/r ${METALLIB_KERNELS_TURBOQUANT_FA}" -e "/\#include \"turboquant-fa.h\"/d" -e "/\#pragma once/d" < "${EMBED}.tmp1" > "${EMBED}.tmp2"
             # Step 3: inline ggml-common.h (replacing __embed_ggml-common.h__ sentinel)
             COMMAND sed -e "/__embed_ggml-common.h__/r ${METALLIB_COMMON}" -e "/__embed_ggml-common.h__/d" < "${EMBED}.tmp2" > "${EMBED}.tmp3"
             # Step 4: inline ggml-metal-impl.h
@@ -104,6 +113,7 @@ if (GGML_METAL_EMBED_LIBRARY)
             COMMAND echo "_ggml_metallib_${kind_sym}_end:"                       >> "${ASM}"
             DEPENDS ../ggml-common.h ggml-metal-impl.h
                     kernels/common.h kernels/dequantize.h kernels/quantize.h
+                    turbo-wht.h kernels/turboquant.h kernels/turboquant-fa.h
                     kernels/${kind}.metal
             COMMENT "Generate embedded Metal library for ${kind}"
             VERBATIM
@@ -122,6 +132,9 @@ else()
     configure_file(kernels/common.h     ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/common.h     COPYONLY)
     configure_file(kernels/dequantize.h ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/dequantize.h COPYONLY)
     configure_file(kernels/quantize.h   ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/quantize.h   COPYONLY)
+    configure_file(turbo-wht.h          ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/turbo-wht.h          COPYONLY)
+    configure_file(kernels/turboquant.h ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/turboquant.h COPYONLY)
+    configure_file(kernels/turboquant-fa.h ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/turboquant-fa.h COPYONLY)
 
     foreach(src ${METALLIB_KERNEL_SOURCES})
         configure_file(${src} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} COPYONLY)
@@ -157,7 +170,7 @@ else()
         add_custom_command(
             OUTPUT ${AIR}
             COMMAND xcrun -sdk macosx metal ${XC_FLAGS} -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} -o ${AIR}
-            DEPENDS ${src} kernels/common.h kernels/dequantize.h kernels/quantize.h ${METALLIB_COMMON} ggml-metal-impl.h
+            DEPENDS ${src} kernels/common.h kernels/dequantize.h kernels/quantize.h turbo-wht.h kernels/turboquant.h kernels/turboquant-fa.h ${METALLIB_COMMON} ggml-metal-impl.h
             COMMENT "Compiling ${src}"
             VERBATIM
         )
@@ -184,6 +197,11 @@ if (NOT GGML_METAL_EMBED_LIBRARY)
         DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/kernels/
         DESTINATION ${CMAKE_INSTALL_BINDIR}/kernels
         FILES_MATCHING PATTERN "*.metal" PATTERN "*.h"
+    )
+
+    install(
+        FILES ${CMAKE_CURRENT_SOURCE_DIR}/turbo-wht.h
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 
     install(

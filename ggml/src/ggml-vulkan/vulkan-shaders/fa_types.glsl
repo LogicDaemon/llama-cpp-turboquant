@@ -10,8 +10,10 @@
 #define FA_TYPE_Q5_0  6u
 #define FA_TYPE_Q5_1  7u
 #define FA_TYPE_Q8_0  8u
+#define FA_TYPE_Q1_0 41u
 #define FA_TYPE_IQ4_NL 20u
 #define FA_TYPE_BF16 30u
+#define FA_TYPE_TURBO3_0 43u
 
 // Number of matrix elements per buffer block, derived from the K/V type spec
 // constant. F32 is treated as a vec4 "block" of 4 floats. F16 uses block size 1

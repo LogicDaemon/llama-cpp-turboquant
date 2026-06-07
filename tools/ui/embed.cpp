@@ -258,6 +258,9 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             cpp += fmt("static const unsigned char asset_%d_data[] = {", i);
+            if (bytes.empty()) {
+                cpp += "0x00,";
+            }
             append_bytes_hex(cpp, bytes);
 
             // note: this is a simple hash for cache busting, not a cryptographic hash; fnv is enough here

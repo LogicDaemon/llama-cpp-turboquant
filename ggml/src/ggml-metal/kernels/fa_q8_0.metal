@@ -48,6 +48,11 @@ template [[host_name("kernel_flash_attn_ext_q8_0_dk320_dv256")]] kernel flash_at
 template [[host_name("kernel_flash_attn_ext_q8_0_dk512_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 512, 512>;
 template [[host_name("kernel_flash_attn_ext_q8_0_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 576, 512>;
 
+#include "turboquant.h"
+#define TURBOQUANT_FA_VEC 0
+#include "turboquant-fa.h"
+#undef TURBOQUANT_FA_VEC
+
 #undef FA_TYPES
 #undef FA_TYPES_BF
 #undef FA_TYPES_F32

@@ -98,6 +98,8 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 #define FA_TYPE_Q5_1  7u
 #define FA_TYPE_Q8_0  8u
 #define FA_TYPE_IQ4_NL 20u
+#define FA_TYPE_Q1_0 41u
+#define FA_TYPE_TURBO3_0 43u
 #define FA_TYPE_BF16 30u
 
 #if defined(BFLOAT16)
@@ -121,6 +123,8 @@ uint fa_block_elems(uint ty) {
         case FA_TYPE_Q5_1: return uint(QUANT_K_Q5_1);
         case FA_TYPE_Q8_0: return uint(QUANT_K_Q8_0);
         case FA_TYPE_IQ4_NL: return uint(QUANT_K_IQ4_NL);
+        case FA_TYPE_Q1_0: return uint(QUANT_K_Q1_0);
+        case FA_TYPE_TURBO3_0: return uint(QUANT_K_TURBO3_0);
         case FA_TYPE_BF16: return 1u;
         default:           return 1u;
     }
@@ -156,6 +160,35 @@ bool fa_type_needs_shmem(uint ty) {
 // through dequantize4 / the MMQ helpers to unpack from the packed block layout.
 #define USE_DECODE_K (FaTypeK != FA_TYPE_F16)
 #define USE_DECODE_V (FaTypeV != FA_TYPE_F16)
+
+#if defined(DATA_A_TURBO3_0)
+const float T3C[8] = float[8](
+    -0.190685, -0.117832, -0.065717, -0.021460,
+     0.021460,  0.065717,  0.117832,  0.190685
+);
+FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
+    FLOAT_TYPEV4 r;
+    for (int k = 0; k < 4; k++) {
+        uint  j  = iqs + uint(k);
+        float nm;
+        uint  qb;
+        uint  sb;
+        if (binding_idx == BINDING_IDX_K) {
+            nm = float(data_k_t3[a_offset + ib].norm);
+            qb = uint(data_k_t3[a_offset + ib].qs[j / 4]);
+            sb = uint(data_k_t3[a_offset + ib].signs[j / 8]);
+        } else {
+            nm = float(data_v_t3[a_offset + ib].norm);
+            qb = uint(data_v_t3[a_offset + ib].qs[j / 4]);
+            sb = uint(data_v_t3[a_offset + ib].signs[j / 8]);
+        }
+        uint lo = (qb >> ((j % 4) * 2)) & 0x3;
+        uint hi = (sb >> (j % 8)) & 0x1;
+        r[k] = FLOAT_TYPE(T3C[lo | (hi << 2)] * nm);
+    }
+    return r;
+}
+#endif
 
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 

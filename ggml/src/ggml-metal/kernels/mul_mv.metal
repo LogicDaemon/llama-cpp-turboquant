@@ -1,5 +1,6 @@
 #include "common.h"
 #include "dequantize.h"
+#include "turboquant.h"
 // Q1_0 dot product: dot = d * (2 * Σ(yl[i] where bit=1) - sumy)
 inline float block_q_n_dot_y(device const block_q1_0 * qb_curr, float sumy, thread float * yl, int il) {
     device const uint8_t * qs = qb_curr->qs + il / 8;
@@ -3223,3 +3224,112 @@ template [[host_name("kernel_mul_mv_id_iq2_s_f32")]]   kernel kernel_mul_mv_id_t
 template [[host_name("kernel_mul_mv_id_iq4_nl_f32")]]  kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq4_nl_f32_impl <N_R0_IQ4_NL>>>;
 template [[host_name("kernel_mul_mv_id_iq4_xs_f32")]]  kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq4_xs_f32_impl <N_R0_IQ4_XS>>>;
 template [[host_name("kernel_mul_mv_id_tq2_0_f32")]]   kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_tq2_0_f32_impl  <N_R0_TQ2_0>>>;
+
+// TurboQuant 1S kernels are kept as an append-only overlay.  This leaves the
+// upstream mat-vec implementations above unchanged during future rebases.
+template <short NR0, typename args_t>
+void kernel_mul_mv_tq3_1s_f32_impl(
+        args_t args, device const char * src0, device const char * src1,
+        device char * dst, threadgroup char * shmem, uint3 tgpig,
+        ushort tiisg, ushort sgitg) {
+    const short NSG = FC_mul_mv_nsg;
+    const int nb = args.ne00 / 32;
+    const int r0 = tgpig.x * NR0;
+    const int r1 = tgpig.y;
+    const int im = tgpig.z;
+    const uint i12 = im % args.ne12;
+    const uint i13 = im / args.ne12;
+    device const float * y = (device const float *) (src1 + r1*args.nb11 + i12*args.nb12 + i13*args.nb13);
+    device const block_tq3_1s * ax[NR0];
+    for (short row = 0; row < NR0; ++row) {
+        const uint64_t offset = (r0 + row)*args.nb01 + (i12/args.r2)*args.nb02 + (i13/args.r3)*args.nb03;
+        ax[row] = (device const block_tq3_1s *) (src0 + offset);
+    }
+    float sumf[NR0] = { 0.0f };
+    for (int ib = sgitg; ib < nb; ib += NSG) {
+        float value = y[ib*32 + tiisg] * tq3_signs[tiisg];
+        for (ushort step = 1; step < 32; step <<= 1) {
+            const float other = simd_shuffle_xor(value, step);
+            value = (tiisg & step) ? other - value : other + value;
+        }
+        value *= tq3_inv_sqrt32;
+        for (short row = 0; row < NR0; ++row) {
+            const device block_tq3_1s & block = ax[row][ib];
+            sumf[row] += tq3_centroids[turbo_tq3_index(block.qs, tiisg)]
+                * float(tiisg < 16 ? block.d0 : block.d1) * value;
+        }
+    }
+    device float * output = (device float *) dst + (uint64_t) im*args.ne0*args.ne1 + (uint64_t) r1*args.ne0;
+    helper_mv_reduce_and_write<NR0>(output, sumf, r0, args.ne01, tiisg, sgitg, shmem);
+}
+
+template <short NR0, typename args_t>
+void kernel_mul_mv_tq4_1s_f32_impl(
+        args_t args, device const char * src0, device const char * src1,
+        device char * dst, threadgroup char * shmem, uint3 tgpig,
+        ushort tiisg, ushort sgitg) {
+    const short NSG = FC_mul_mv_nsg;
+    const int nb = args.ne00 / 32;
+    const int r0 = tgpig.x * NR0;
+    const int r1 = tgpig.y;
+    const int im = tgpig.z;
+    const uint i12 = im % args.ne12;
+    const uint i13 = im / args.ne12;
+    device const float * y = (device const float *) (src1 + r1*args.nb11 + i12*args.nb12 + i13*args.nb13);
+    device const block_tq4_1s * ax[NR0];
+    for (short row = 0; row < NR0; ++row) {
+        const uint64_t offset = (r0 + row)*args.nb01 + (i12/args.r2)*args.nb02 + (i13/args.r3)*args.nb03;
+        ax[row] = (device const block_tq4_1s *) (src0 + offset);
+    }
+    float sumf[NR0] = { 0.0f };
+    for (int ib = sgitg; ib < nb; ib += NSG) {
+        float value = y[ib*32 + tiisg] * tq3_signs[tiisg];
+        for (ushort step = 1; step < 32; step <<= 1) {
+            const float other = simd_shuffle_xor(value, step);
+            value = (tiisg & step) ? other - value : other + value;
+        }
+        value *= tq3_inv_sqrt32;
+        for (short row = 0; row < NR0; ++row) {
+            const device block_tq4_1s & block = ax[row][ib];
+            const uint index = (block.qs[tiisg / 2] >> ((tiisg & 1) * 4)) & 15;
+            sumf[row] += tq4_centroids[index]
+                * float(tiisg < 16 ? block.d0 : block.d1) * value;
+        }
+    }
+    device float * output = (device float *) dst + (uint64_t) im*args.ne0*args.ne1 + (uint64_t) r1*args.ne0;
+    helper_mv_reduce_and_write<NR0>(output, sumf, r0, args.ne01, tiisg, sgitg, shmem);
+}
+
+[[host_name("kernel_mul_mv_tq3_1s_f32")]]
+kernel void kernel_mul_mv_tq3_1s_f32(
+        constant ggml_metal_kargs_mul_mv & args, device const char * src0,
+        device const char * src1, device char * dst,
+        threadgroup char * shmem [[threadgroup(0)]],
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]],
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) {
+    kernel_mul_mv_tq3_1s_f32_impl<N_R0_TQ3_1S, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
+}
+
+[[host_name("kernel_mul_mv_tq4_1s_f32")]]
+kernel void kernel_mul_mv_tq4_1s_f32(
+        constant ggml_metal_kargs_mul_mv & args, device const char * src0,
+        device const char * src1, device char * dst,
+        threadgroup char * shmem [[threadgroup(0)]],
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]],
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) {
+    kernel_mul_mv_tq4_1s_f32_impl<N_R0_TQ4_1S, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
+}
+
+template [[host_name("kernel_mul_mv_ext_tq3_1s_f32_r1_2")]] kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<2, block_tq3_1s, 32, dequantize_tq3_1s_t4>;
+template [[host_name("kernel_mul_mv_ext_tq3_1s_f32_r1_3")]] kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<3, block_tq3_1s, 32, dequantize_tq3_1s_t4>;
+template [[host_name("kernel_mul_mv_ext_tq3_1s_f32_r1_4")]] kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<4, block_tq3_1s, 32, dequantize_tq3_1s_t4>;
+template [[host_name("kernel_mul_mv_ext_tq3_1s_f32_r1_5")]] kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<5, block_tq3_1s, 32, dequantize_tq3_1s_t4>;
+template [[host_name("kernel_mul_mv_ext_tq4_1s_f32_r1_2")]] kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<2, block_tq4_1s, 32, dequantize_tq4_1s_t4>;
+template [[host_name("kernel_mul_mv_ext_tq4_1s_f32_r1_3")]] kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<3, block_tq4_1s, 32, dequantize_tq4_1s_t4>;
+template [[host_name("kernel_mul_mv_ext_tq4_1s_f32_r1_4")]] kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<4, block_tq4_1s, 32, dequantize_tq4_1s_t4>;
+template [[host_name("kernel_mul_mv_ext_tq4_1s_f32_r1_5")]] kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f32_disp<5, block_tq4_1s, 32, dequantize_tq4_1s_t4>;
+
+template [[host_name("kernel_mul_mv_id_tq3_1s_f32")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_tq3_1s_f32_impl<N_R0_TQ3_1S, constant ggml_metal_kargs_mul_mv &>>>;
+template [[host_name("kernel_mul_mv_id_tq4_1s_f32")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_tq4_1s_f32_impl<N_R0_TQ4_1S, constant ggml_metal_kargs_mul_mv &>>>;

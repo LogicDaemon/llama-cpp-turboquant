@@ -1796,66 +1796,6 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         return;
     }
 
-    bool use_mul_mat_vec_f = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16)
-        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-    bool use_mul_mat_f     = !ggml_is_quantized(src0->type)
-        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-    // TQ weight types use fused dp4a path (all batch sizes), not mmvq/mmq
-    const bool is_tq_weight = (src0->type == GGML_TYPE_TQ4_1S || src0->type == GGML_TYPE_TQ3_1S);
-    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight
-        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
-        && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
-    bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight
-        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-
-    bool any_gpus_with_slow_fp16 = false;
-
-    if (split) {
-        ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *) src0->buffer->buft->context;
-        auto & tensor_split = buft_ctx->tensor_split;
-        for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-            // skip devices that are not going to do any work:
-            if (tensor_split[id] >= (id + 1 < ggml_backend_cuda_get_device_count() ? tensor_split[id + 1] : 1.0f)) {
-                continue;
-            }
-
-            const int cc            = ggml_cuda_info().devices[id].cc;
-            const int warp_size     = ggml_cuda_info().devices[id].warp_size;
-            use_mul_mat_q           = use_mul_mat_q             && ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[1], /*n_experts=*/0);
-            use_mul_mat_f           = use_mul_mat_f             && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[1], /*mul_mat_id=*/false);
-            use_mul_mat_vec_f       = use_mul_mat_vec_f         && ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, src1->ne[1]);
-            use_mul_mat_vec_q       = use_mul_mat_vec_q         && ggml_cuda_should_use_mmvq(src0->type, cc, src1->ne[1]);
-            any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16   || !fast_fp16_hardware_available(cc);
-        }
-    } else {
-        const int cc            = ggml_cuda_info().devices[ctx.device].cc;
-        const int warp_size     = ggml_cuda_info().devices[ctx.device].warp_size;
-        use_mul_mat_q           = use_mul_mat_q             && ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[1], /*n_experts=*/0);
-        use_mul_mat_f           = use_mul_mat_f             && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[1], /*mul_mat_id=*/false);
-        use_mul_mat_vec_f       = use_mul_mat_vec_f         && ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, src1->ne[1]);
-        use_mul_mat_vec_q       = use_mul_mat_vec_q         && ggml_cuda_should_use_mmvq(src0->type, cc, src1->ne[1]);
-        any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16   || !fast_fp16_hardware_available(cc);
-    }
-
-    // debug helpers
-    //printf("src0: %8d %8d %8d %8d\n", src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3]);
-    //printf("      %8d %8d %8d %8d\n", src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3]);
-    //printf("src1: %8d %8d %8d %8d\n", src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3]);
-    //printf("      %8d %8d %8d %8d\n", src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3]);
-    //printf("src0 is contiguous %d, transposed %d, type = %s, name = %s\n", ggml_is_contiguous(src0), ggml_is_transposed(src0), ggml_type_name(src0->type), src0->name);
-    //printf("src1 is contiguous %d, transposed %d, type = %s, name = %s\n", ggml_is_contiguous(src1), ggml_is_transposed(src1), ggml_type_name(src1->type), src1->name);
-
-    //TODO update for generic tensor parallelism
-    const int cc                 = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    bool use_batched_cublas_f16  = src0->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || !any_gpus_with_slow_fp16);
-    bool use_batched_cublas_bf16 = src0->type == GGML_TYPE_BF16 && bf16_mma_hardware_available(cc);
-    bool use_batched_cublas_f32  = src0->type == GGML_TYPE_F32;
-
-    const int32_t hint = ggml_get_op_params_i32(dst, 1);
-    if (hint == GGML_HINT_SRC0_IS_HADAMARD && !split && ggml_cuda_op_fwht(ctx, src1, dst)) {
-        return;
-    }
-
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
@@ -1863,33 +1803,25 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         // The custom F16 vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
-    } else if (!split && use_mul_mat_f) {
-        ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
-    } else if (!split && use_mul_mat_vec_q) {
-        ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
-    } else if (!split && use_mul_mat_q) {
-        ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
-    } else if (!split && (use_batched_cublas_f16 || use_batched_cublas_bf16 || use_batched_cublas_f32)
-        && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
-        // general KQ + KQV multi-batch without FlashAttention
-        ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
-    } else if (use_mul_mat_vec_f) {
-        ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_f, nullptr);
-    } else if (use_mul_mat_vec_q) {
-        ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q, quantize_row_q8_1_cuda);
-    } else if (use_mul_mat_q) {
-        ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q, quantize_mmq_q8_1_cuda);
-    } else if (!split && is_tq_weight && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE) {
-        // Fused TQ weight mul_mat with pre-rotated activations via warp shuffle WHT
-        // Handles ne[1]=1 (decode) and ne[1]≤8 (multi-token / speculative decoding)
-        ggml_cuda_mul_mat_tq(ctx, src0, src1, dst);
-    } else if (!split && is_tq_weight && src0->type == GGML_TYPE_TQ4_1S) {
-        // Large prefill: runtime TQ4_1S → q8_0 scratch conversion + cuBLAS
-        // Gets tensor core throughput without permanent 1.7× VRAM cost
-        ggml_cuda_mul_mat_tq4_1s_cublas(ctx, src0, src1, dst);
-    } else {
-        ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas, nullptr);
+        return;
     }
+
+    // TQ types use their own kernels rather than MMVQ/MMQ.
+    if (src0->type == GGML_TYPE_TQ4_1S || src0->type == GGML_TYPE_TQ3_1S) {
+        if (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE) {
+            // Fused TQ weight mul_mat with pre-rotated activations via warp shuffle WHT
+            // Handles ne[1]=1 (decode) and ne[1]<=8 (multi-token / speculative decoding)
+            ggml_cuda_mul_mat_tq(ctx, src0, src1, dst);
+        } else if (src0->type == GGML_TYPE_TQ4_1S) {
+            // Large prefill: runtime TQ4_1S -> q8_0 scratch conversion + cuBLAS
+            // Gets tensor core throughput without permanent 1.7x VRAM cost
+            ggml_cuda_mul_mat_tq4_1s_cublas(ctx, src0, src1, dst);
+        } else {
+            ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
+        }
+        return;
+    }
+
     if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
@@ -4876,7 +4808,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                            (
                                (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 ||
                                op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q5_0 ||
-                               op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL) &&
+                               op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL ||
+                               op->type == GGML_TYPE_TURBO3_0 || op->type == GGML_TYPE_TURBO2_0 || op->type == GGML_TYPE_TURBO4_0) &&
                                op->src[0]->type == GGML_TYPE_F32
                            ) || (
                                op->type == GGML_TYPE_F16 && op->src[0]->type == GGML_TYPE_F16

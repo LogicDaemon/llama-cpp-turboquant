@@ -16,6 +16,89 @@
 [ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md) / [maintainer PRs](https://github.com/ggml-org/llama.cpp/issues?q=is%3Apr%20is%3Aopen%20draft%3AFalse%20(author%3Argerganov%20OR%20author%3AKitaitiMakoto%20OR%20author%3Adanbev%20OR%20author%3Aaldehir%20OR%20author%3Amax-krasnyansky%20OR%20author%3ACISC%20OR%20author%3Aggerganov%20OR%20author%3Aam17an%20OR%20author%3Abartowski1182%20OR%20author%3Anikwen%20OR%20author%3Ahipudding%20OR%20author%3AServeurpersoCom%20OR%20author%3Apwilkin%20OR%20author%3Areeselevine%20OR%20author%3Angxson%20OR%20author%3Ajeffbolznv%20OR%20author%3Amarty1885%20OR%20author%3A0cc4m%20OR%20author%3ATitaniumtown%20OR%20author%3Aangt%20OR%20author%3AIMbackK%20OR%20author%3Aarthw%20OR%20author%3AJohannesGaessler%20OR%20author%3AORippler%20OR%20author%3Aruixiang63%20OR%20author%3Axctan%20OR%20author%3Aallozaur%20OR%20author%3Ayomaytk%20OR%20author%3Aaendk%20OR%20author%3Agaugarg-nv%20OR%20author%3Ataronaeo%20OR%20author%3Aforforever73%20OR%20author%3Alhez%20OR%20author%3Anetrunnereve%20OR%20author%3Afairydreaming)%20sort%3Aupdated-desc) / [dev stats](https://github.com/ggml-org/llama.cpp-dev) / [lib llama API](https://github.com/ggml-org/llama.cpp/issues/9289) / [llama-server REST API](https://github.com/ggml-org/llama.cpp/issues/9291)
 
 </div>
+LLM inference in C/C++
+
+<!-- thecodacus/llama.cpp prefix -->
+## ⚡ This fork — Fable's MoE-offload prefill optimizations
+
+Two **opt-in** optimizations for large MoE models whose experts are offloaded to system RAM
+(`--n-cpu-moe`), found and implemented by Fable. Both are **off by default**, toggled via
+environment variables, and produce **token-identical** output to mainline.
+
+| Env var | What it does |
+| --- | --- |
+| `GGML_CUDA_REGISTER_HOST=1` | Page-locks (pins) the mmap'd CPU expert weights so host→device copies go straight over DMA instead of through the driver's hidden bounce buffer (~6–7 → ~20 GB/s). |
+| `GGML_SCHED_PREFETCH_EXPERTS=1` | Prefetches each layer's experts on a second CUDA stream, so the weight uploads overlap compute instead of stalling the GPU. |
+
+### Benchmark
+
+Measured on an **RTX 3060 12GB** with **Qwen3.6-35B-A3B** (`--n-cpu-moe 26`), prompt-processing at 2048 (`MODEL` = path to your `.gguf`):
+
+```bash
+# baseline (patches off):
+./build/bin/llama-bench -m MODEL -ngl 99 -ncmoe 26 -p 2048 -n 0 -r 5 -b 2048 -ub 2048
+
+# patched (both optimizations on):
+GGML_CUDA_REGISTER_HOST=1 GGML_SCHED_PREFETCH_EXPERTS=1 \
+./build/bin/llama-bench -m MODEL -ngl 99 -ncmoe 26 -p 2048 -n 0 -r 5 -b 2048 -ub 2048
+```
+
+Result: **~1143 → ~1880 t/s** prefill (**+64%**) — same GPU, same settings, token-identical.
+
+Branches: [`fable5/host-register`](https://github.com/thecodacus/llama.cpp/tree/fable5/host-register) (pinning only) · [`fable5/prefetch-experts`](https://github.com/thecodacus/llama.cpp/tree/fable5/prefetch-experts) (both — this branch).
+<!-- end of thecodacus/llama.cpp prefix -->
+
+<!-- TheTom/llama-cpp-turboquant prefix -->
+
+# TurboQuant+
+
+> **🚀 TurboQuant KV cache compression is now in [vLLM](https://github.com/vllm-project/vllm)** ([PR #38479](https://github.com/vllm-project/vllm/pull/38479), merged April 2026): `--kv-cache-dtype turboquant_k8v4` and friends, with fused Triton store/decode kernels. The PR discussion drew on the asymmetric K/V findings from this repo. **Upstream llama.cpp has merged the core idea too**: Hadamard KV cache rotation ([#21038](https://github.com/ggml-org/llama.cpp/pull/21038), citing TurboQuant directly) with fast WHT kernels on CPU ([#22631](https://github.com/ggml-org/llama.cpp/pull/22631)), CUDA ([#23615](https://github.com/ggml-org/llama.cpp/pull/23615)), and Vulkan ([#23687](https://github.com/ggml-org/llama.cpp/pull/23687)). Rotation + the stock q4_0 cache is essentially turbo4's rotation stage; the PolarQuant codebook, norm extraction, and asymmetric policies remain here and in the fork.
+
+> ### [Getting Started Guide](docs/getting-started.md) | [Configuration Recommendations](docs/turboquant-recommendations.md) | [Benchmarks](docs/benchmarks.md) | [Commercial Support](https://x.com/no_stp_on_snek)
+
+Implementation of [TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/) (ICLR 2026) with implementation work, experiments, and follow-on findings beyond the base paper. Compresses transformer KV cache **3.8-6.4x** using PolarQuant + Walsh-Hadamard rotation, at near q8_0 prefill speed and ~0.9x decode throughput at long context. Validated end-to-end from 1.5B to **104B at 128K context on a MacBook** (turbo3, PPL 4.024, 74 GB peak memory).
+
+## Base and the fork which this repository is based on
+
+| Engine | Platform | Status | Notes |
+|--------|----------|--------|-------|
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) | All backends | **Upstream, rotation merged** | Hadamard KV cache rotation ([#21038](https://github.com/ggml-org/llama.cpp/pull/21038)) + fast WHT kernels (CPU [#22631](https://github.com/ggml-org/llama.cpp/pull/22631), CUDA [#23615](https://github.com/ggml-org/llama.cpp/pull/23615), Vulkan [#23687](https://github.com/ggml-org/llama.cpp/pull/23687)). Rotation + q4_0 cache approximates turbo4; full PolarQuant codec is in the fork below |
+| [llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) | Metal, CUDA, HIP, CPU | **Production fork** | turbo2/3/4 KV cache + TQ3_1S/TQ4_1S weight formats; [prebuilt binaries](https://github.com/TheTom/llama-cpp-turboquant/releases) for Mac (Metal) and Windows (CUDA) |
+
+## Key Findings
+
+Three follow-on findings, independently validated by multiple researchers across different hardware and backends:
+
+1. **V compression is free.** Compressing the value cache (even down to 2 bits) has zero measurable effect on attention quality when key precision is maintained. Confirmed on Metal (M5 Max), CUDA RTX 4090 (@sztlink), and CUDA RTX 3090 (@HyperionMS2040). See [asymmetric K/V paper](docs/papers/asymmetric-kv-compression.md).
+2. **All quality degradation comes from K compression.** This is why asymmetric configs (q8_0-K + turbo-V) rescue models where symmetric fails. Validated across Qwen, Llama, Mistral, and Command-R+ families. See [M5 Max stress test](docs/papers/m5-max-stress-test.md).
+3. **Boundary layers are disproportionately sensitive.** Protecting the first 2 + last 2 layers at higher precision recovers 37-91% of the quality gap. See [Boundary V paper](docs/papers/layer-aware-v-compression.md).
+
+Upstream llama.cpp rotations PR got some benchmark results:
+https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4146397570
+https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4154465964
+
+<!-- end of TheTom/llama-cpp-turboquant prefix -->
+
+## Recent API changes
+
+- [Changelog for `libllama` API](https://github.com/ggml-org/llama.cpp/issues/9289)
+- [Changelog for `llama-server` REST API](https://github.com/ggml-org/llama.cpp/issues/9291)
+
+## Hot topics
+
+- **Hugging Face cache migration: models downloaded with `-hf` are now stored in the standard Hugging Face cache directory, enabling sharing with other HF tools.**
+- **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
+- [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
+- [[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
+- Support for the `gpt-oss` model with native MXFP4 format has been added | [PR](https://github.com/ggml-org/llama.cpp/pull/15091) | [Collaboration with NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-openai-oss) | [Comment](https://github.com/ggml-org/llama.cpp/discussions/15095)
+- Multimodal support arrived in `llama-server`: [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) | [documentation](./docs/multimodal.md)
+- VS Code extension for FIM completions: https://github.com/ggml-org/llama.vscode
+- Vim/Neovim plugin for FIM completions: https://github.com/ggml-org/llama.vim
+- Hugging Face Inference Endpoints now support GGUF out of the box! https://github.com/ggml-org/llama.cpp/discussions/9669
+- Hugging Face GGUF editor: [discussion](https://github.com/ggml-org/llama.cpp/discussions/9268) | [tool](https://huggingface.co/spaces/CISCai/gguf-editor)
+- WebGPU support is now available in the browser, see a blog/demo introducing it [here](https://reeselevine.github.io/llamas-on-the-web/).
+
+----
 
 ## Quick start
 

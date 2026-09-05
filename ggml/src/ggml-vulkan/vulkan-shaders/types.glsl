@@ -1827,7 +1827,6 @@ struct block_turbo4_0
 #define A_TYPE block_turbo4_0
 #endif
 
-
 #define QUANT_K_TQ4_1S 32
 #define QUANT_R_TQ4_1S 1
 
@@ -1843,6 +1842,12 @@ struct block_tq4_1s
 #define QUANT_R QUANT_R_TQ4_1S
 #define QUANT_AUXF 1
 #define A_TYPE block_tq4_1s
+#endif
+
+// Any turbo tier compiled as a dedicated flash-attn variant: K/V bindings are
+// turbo-only (no f16/quant aliases at bindings 1/2).
+#if defined(DATA_A_TURBO2_0) || defined(DATA_A_TURBO3_0) || defined(DATA_A_TURBO4_0)
+#define DATA_A_TURBO_KV 1
 #endif
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)

@@ -125,6 +125,7 @@ uint fa_block_elems(uint ty) {
         case FA_TYPE_Q8_0: return uint(QUANT_K_Q8_0);
         case FA_TYPE_IQ4_NL: return uint(QUANT_K_IQ4_NL);
         case FA_TYPE_BF16: return 1u;
+        case FA_TYPE_Q1_0: return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
         case FA_TYPE_TURBO2_0: return uint(QUANT_K_TURBO2_0);
         case FA_TYPE_TURBO3_0: return uint(QUANT_K_TURBO3_0);
         case FA_TYPE_TURBO4_0: return uint(QUANT_K_TURBO4_0);

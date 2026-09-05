@@ -409,7 +409,67 @@ void quantize(uint dst_idx, uint src_idx)
 }
 #endif
 
-#if defined(SET_ROWS) && defined(DATA_A_TURBO3_0)
+#if defined(SET_ROWS) && (defined(DATA_A_TURBO2_0) || defined(DATA_A_TURBO3_0) || defined(DATA_A_TURBO4_0))
+
+// TurboQuant set_rows: one 128-element block per workgroup. Normalize the
+// block, apply the randomized WHT (signs1 -> butterfly -> signs2), then
+// quantize to Lloyd-Max centroids and pack. Requires subgroup size 32.
+const float TS1[128] = float[128](
+    -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
+    -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1,  1,  1,  1, -1,  1,
+    -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1,  1,
+     1, -1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,  1, -1,
+    -1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,  1, -1,  1,
+     1, -1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,  1,  1, -1,  1
+);
+
+const float TS2[128] = float[128](
+     1,  1,  1,  1, -1,  1,  1, -1,  1, -1, -1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
+);
+
+const float TINV = 0.08838834764831845;  // 1 / sqrt(128)
+
+#if defined(DATA_A_TURBO3_0)
+const float TC[8] = float[8](
+    -0.190685, -0.117832, -0.065717, -0.021460,
+     0.021460,  0.065717,  0.117832,  0.190685
+);
+const float TM[7] = float[7](
+    -0.154259, -0.091775, -0.043589,
+     0.0,
+     0.043589,  0.091775,  0.154259
+);
+#elif defined(DATA_A_TURBO2_0)
+const float TC[4] = float[4](-0.133462, -0.039994, 0.039994, 0.133462);
+const float TM[3] = float[3](-0.086728, 0.0, 0.086728);
+#else
+const float TC[16] = float[16](
+    -0.173926, -0.117195, -0.089527, -0.068756,
+    -0.051262, -0.035597, -0.020989, -0.006938,
+     0.006938,  0.020989,  0.035597,  0.051262,
+     0.068756,  0.089527,  0.117195,  0.173926
+);
+const float TM[15] = float[15](
+    -0.145561, -0.103361, -0.079142, -0.060009,
+    -0.043430, -0.028293, -0.013964,  0.0,
+     0.013964,  0.028293,  0.043430,  0.060009,
+     0.079142,  0.103361,  0.145561
+);
+#endif
+
+shared float wht[128];
+shared float sg_acc[16];
+shared float gnrm;
+
 void main() {
     const uint t   = gl_LocalInvocationID.x;
     const uint g   = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
@@ -464,12 +524,26 @@ void main() {
     // Step 5: apply signs2 + scaling
     float rv = wht[t] * TINV * TS2[t];
 
-    // Step 6: quantize -- all 128 threads participate
-    uint idx = rv < TM[0] ? 0u : rv < TM[1] ? 1u : rv < TM[2] ? 2u : rv < TM[3] ? 3u :
-              rv < TM[4] ? 4u : rv < TM[5] ? 5u : rv < TM[6] ? 6u : 7u;
+    // nearest centroid via midpoint thresholds
+    uint idx = 0u;
+    [[unroll]] for (uint i = 0; i < TM.length(); i++) {
+        if (rv >= TM[i]) idx = i + 1u;
+    }
 
-    // Pack qs: 4 elements per byte via subgroup shuffle
     uint sg_lane = gl_SubgroupInvocationID;
+#if defined(DATA_A_TURBO4_0)
+    // pack qs: 2 elements per byte (4-bit nibble each)
+    uint pair_low  = subgroupShuffle(idx & 0xFu, sg_lane & ~1u);
+    uint pair_high = subgroupShuffle(idx & 0xFu, (sg_lane & ~1u) + 1u);
+    uint qs_byte = pair_low | (pair_high << 4u);
+    if (sg_lane % 2u == 0u) {
+        data_q[db].qs[t / 2u] = uint8_t(qs_byte);
+    }
+    if (t == 0u) {
+        data_q[db].rnorm = float16_t(0.0);  // reserved in 4-bit mode
+    }
+#else
+    // pack qs: 4 elements per byte (2-bit each) via subgroup shuffle
     uint my_low2 = idx & 0x3u;
     uint qs_byte = 0u;
     [[unroll]] for (uint k = 0; k < 4; k++) {
@@ -480,12 +554,15 @@ void main() {
         data_q[db].qs[t / 4u] = uint8_t(qs_byte);
     }
 
+#if defined(DATA_A_TURBO3_0)
     // Pack signs: 8 elements per byte via subgroup ballot
     uvec4 ballot = subgroupBallot(((idx >> 2u) & 1u) != 0u);
     if (sg_lane % 8u == 0u) {
         uint local_byte = sg_lane / 8u;
         data_q[db].signs[t / 8u] = uint8_t((ballot.x >> (local_byte * 8u)) & 0xFFu);
     }
+#endif
+#endif
 
     // Step 7: reconstruction norm via subgroup reduction
     float rc = TC[idx] * TC[idx];

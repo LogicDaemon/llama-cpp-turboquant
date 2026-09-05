@@ -3743,6 +3743,18 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
         path = FA_SCALAR;
     }
 
+    // Q1_0 K/V is only implemented on coopmat2 (flash_attn_cm2); there is no scalar FA shader for it.
+    if ((k_type == GGML_TYPE_Q1_0 || v_type == GGML_TYPE_Q1_0) && device->coopmat2) {
+        path = FA_COOPMAT2;
+    }
+
+    // turbo K/V dequant is implemented in the scalar and coopmat1 FA shaders only.
+    const bool turbo_kv = k_type == GGML_TYPE_TURBO2_0 || k_type == GGML_TYPE_TURBO3_0 || k_type == GGML_TYPE_TURBO4_0 ||
+                          v_type == GGML_TYPE_TURBO2_0 || v_type == GGML_TYPE_TURBO3_0 || v_type == GGML_TYPE_TURBO4_0;
+    if (turbo_kv && path == FA_COOPMAT2) {
+        path = FA_SCALAR;
+    }
+
     switch (path) {
     case FA_SCALAR:
         return get_fa_tuning_params_scalar(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
@@ -4338,10 +4350,32 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
         const bool bf16_kv = fa.first.k_type == GGML_TYPE_BF16;
         const bool use_mmq = ggml_vk_fa_scalar_uses_mmq(device, fa.first.k_type, fa.first.v_type);
+        const bool is_turbo2 = (fa.first.k_type == GGML_TYPE_TURBO2_0);
+        const bool is_turbo3 = (fa.first.k_type == GGML_TYPE_TURBO3_0);
+        const bool is_turbo4 = (fa.first.k_type == GGML_TYPE_TURBO4_0);
         const void * spv_data = nullptr;
         size_t spv_size = 0;
         const char *name = nullptr;
-        if (bf16_kv) {
+        if (is_turbo2 || is_turbo3 || is_turbo4) {
+            // Dedicated SPIR-V built with DATA_A_TURBO*_0: turbo-only K/V
+            // bindings and per-element centroid dequant.
+            if (device->fp16) {
+                if (f32acc) {
+                    if (is_turbo2)      { spv_data = flash_attn_f32_f16_turbo2_0_data; spv_size = flash_attn_f32_f16_turbo2_0_len; }
+                    else if (is_turbo3) { spv_data = flash_attn_f32_f16_turbo3_0_data; spv_size = flash_attn_f32_f16_turbo3_0_len; }
+                    else                { spv_data = flash_attn_f32_f16_turbo4_0_data; spv_size = flash_attn_f32_f16_turbo4_0_len; }
+                } else {
+                    if (is_turbo2)      { spv_data = flash_attn_f32_f16_turbo2_0_f16acc_data; spv_size = flash_attn_f32_f16_turbo2_0_f16acc_len; }
+                    else if (is_turbo3) { spv_data = flash_attn_f32_f16_turbo3_0_f16acc_data; spv_size = flash_attn_f32_f16_turbo3_0_f16acc_len; }
+                    else                { spv_data = flash_attn_f32_f16_turbo4_0_f16acc_data; spv_size = flash_attn_f32_f16_turbo4_0_f16acc_len; }
+                }
+            } else {
+                if (is_turbo2)      { spv_data = flash_attn_f32_f16_turbo2_0_fp32_data; spv_size = flash_attn_f32_f16_turbo2_0_fp32_len; }
+                else if (is_turbo3) { spv_data = flash_attn_f32_f16_turbo3_0_fp32_data; spv_size = flash_attn_f32_f16_turbo3_0_fp32_len; }
+                else                { spv_data = flash_attn_f32_f16_turbo4_0_fp32_data; spv_size = flash_attn_f32_f16_turbo4_0_fp32_len; }
+            }
+            name = aligned ? "flash_attn_f32_f16_aligned" : "flash_attn_f32_f16";
+        } else if (bf16_kv) {
             spv_data = flash_attn_f32_f16_fp32_data;
             spv_size = flash_attn_f32_f16_fp32_len;
             name = aligned ? "flash_attn_f32_bf16_aligned" : "flash_attn_f32_bf16";
@@ -4391,11 +4425,25 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             (void) is_turbo3; // turbo3 FA SPIR-V generation deferred; no dedicated pipeline yet
 
             const bool bf16_kv = fa.first.k_type == GGML_TYPE_BF16;
+            const bool is_turbo2 = (fa.first.k_type == GGML_TYPE_TURBO2_0);
+            const bool is_turbo3 = (fa.first.k_type == GGML_TYPE_TURBO3_0);
+            const bool is_turbo4 = (fa.first.k_type == GGML_TYPE_TURBO4_0);
 
             const void * spv_data;
             size_t spv_size;
             const char *name;
-            if (bf16_kv) {
+            if (is_turbo2 || is_turbo3 || is_turbo4) {
+                if (f32acc) {
+                    if (is_turbo2)      { spv_data = flash_attn_f32_f16_turbo2_0_cm1_data; spv_size = flash_attn_f32_f16_turbo2_0_cm1_len; }
+                    else if (is_turbo3) { spv_data = flash_attn_f32_f16_turbo3_0_cm1_data; spv_size = flash_attn_f32_f16_turbo3_0_cm1_len; }
+                    else                { spv_data = flash_attn_f32_f16_turbo4_0_cm1_data; spv_size = flash_attn_f32_f16_turbo4_0_cm1_len; }
+                } else {
+                    if (is_turbo2)      { spv_data = flash_attn_f32_f16_turbo2_0_f16acc_cm1_data; spv_size = flash_attn_f32_f16_turbo2_0_f16acc_cm1_len; }
+                    else if (is_turbo3) { spv_data = flash_attn_f32_f16_turbo3_0_f16acc_cm1_data; spv_size = flash_attn_f32_f16_turbo3_0_f16acc_cm1_len; }
+                    else                { spv_data = flash_attn_f32_f16_turbo4_0_f16acc_cm1_data; spv_size = flash_attn_f32_f16_turbo4_0_f16acc_cm1_len; }
+                }
+                name = aligned ? "flash_attn_f32_f16_aligned_cm1" : "flash_attn_f32_f16_cm1";
+            } else if (bf16_kv) {
 #if defined(VK_KHR_shader_bfloat16) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
                 if (!device->coopmat_bf16_support) continue;
                 spv_data = flash_attn_f32_f16_bf16_cm1_data;
@@ -5396,7 +5444,10 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [src_idx][GGML_TYPE_Q5_0], "set_rows_" #src "_q5_0" #itype, set_rows_ ## src ## _q5_0 ## itype ## _len, set_rows_ ## src ## _q5_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [src_idx][GGML_TYPE_Q5_1], "set_rows_" #src "_q5_1" #itype, set_rows_ ## src ## _q5_1 ## itype ## _len, set_rows_ ## src ## _q5_1 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [src_idx][GGML_TYPE_Q8_0], "set_rows_" #src "_q8_0" #itype, set_rows_ ## src ## _q8_0 ## itype ## _len, set_rows_ ## src ## _q8_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
-        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [src_idx][GGML_TYPE_IQ4_NL], "set_rows_" #src "_iq4_nl" #itype, set_rows_ ## src ## _iq4_nl ## itype ## _len, set_rows_ ## src ## _iq4_nl ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true);
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [src_idx][GGML_TYPE_IQ4_NL], "set_rows_" #src "_iq4_nl" #itype, set_rows_ ## src ## _iq4_nl ## itype ## _len, set_rows_ ## src ## _iq4_nl ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [src_idx][GGML_TYPE_TURBO2_0], "set_rows_" #src "_turbo2_0" #itype, set_rows_ ## src ## _turbo2_0 ## itype ## _len, set_rows_ ## src ## _turbo2_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true, true, 32u); \
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [src_idx][GGML_TYPE_TURBO3_0], "set_rows_" #src "_turbo3_0" #itype, set_rows_ ## src ## _turbo3_0 ## itype ## _len, set_rows_ ## src ## _turbo3_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true, true, 32u); \
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [src_idx][GGML_TYPE_TURBO4_0], "set_rows_" #src "_turbo4_0" #itype, set_rows_ ## src ## _turbo4_0 ## itype ## _len, set_rows_ ## src ## _turbo4_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true, true, 32u);
 
     SET_ROWS(0, f32, _i32)
     SET_ROWS(0, f32, _i64)
@@ -17931,6 +17982,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_IQ4_NL:
                         return true;
+                    case GGML_TYPE_Q1_0:
+                        return coopmat2;
                     // TurboQuant K/V flash attention: dequant is fused into the
                     // scalar/coopmat1 FA shaders via dequantize4() (flash_attn_dequant.glsl),
                     // so the standard f16 FA pipeline handles turbo K/V.
@@ -17946,6 +17999,16 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     return false;
                 }
                 if ((op->src[1]->type == GGML_TYPE_BF16) != (op->src[2]->type == GGML_TYPE_BF16)) {
+                    return false;
+                }
+                // dedicated turbo FA SPIR-V decodes both K and V as the same turbo tier
+                if ((op->src[1]->type == GGML_TYPE_TURBO2_0) != (op->src[2]->type == GGML_TYPE_TURBO2_0)) {
+                    return false;
+                }
+                if ((op->src[1]->type == GGML_TYPE_TURBO3_0) != (op->src[2]->type == GGML_TYPE_TURBO3_0)) {
+                    return false;
+                }
+                if ((op->src[1]->type == GGML_TYPE_TURBO4_0) != (op->src[2]->type == GGML_TYPE_TURBO4_0)) {
                     return false;
                 }
                 if (!coopmat2 && !(device->subgroup_shuffle && device->subgroup_vote)) {

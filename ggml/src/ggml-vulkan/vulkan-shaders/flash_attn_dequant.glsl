@@ -12,7 +12,7 @@
 // illegal to return from / pass to functions. Macros expand inline where the
 // float16 stays in storage and is converted to FLOAT_TYPE at use.
 
-#if !defined(DATA_A_TURBO3_0)
+#if !defined(DATA_A_TURBO_KV)
 // F32 is fed as a vec4 "block" (4 floats), matching what dequant_funcs_cm2.glsl
 // does for F32 in the cm2 shader. FaBlockBytesK/V == 16 for F32.
 layout (binding = 1) readonly buffer K_PACKED_F32  { vec4 data[]; }                k_packed_f32;
@@ -30,16 +30,17 @@ layout (binding = 1) readonly buffer K_PACKED_Q8_0 { block_q8_0_packed16 data[];
 layout (binding = 2) readonly buffer V_PACKED_Q8_0 { block_q8_0_packed16 data[]; } v_packed_q8_0;
 layout (binding = 1) readonly buffer K_PACKED_IQ4_NL { block_iq4_nl_packed16 data[]; } k_packed_iq4_nl;
 layout (binding = 2) readonly buffer V_PACKED_IQ4_NL { block_iq4_nl_packed16 data[]; } v_packed_iq4_nl;
-#endif  // !DATA_A_TURBO3_0
 
 layout (binding = 1) readonly buffer K_PACKED_BF16 { u16vec4 data[]; } k_packed_bf16;
 layout (binding = 2) readonly buffer V_PACKED_BF16 { u16vec4 data[]; } v_packed_bf16;
+#endif  // !DATA_A_TURBO_KV
 
-// TurboQuant K/V views. Explicit std430 + restrict because the turbo blocks have
-// a different (larger) stride than the q4/q5/q8 views aliased at the same binding
-// (turbo3 is a 50-byte block), so the driver must not assume a uniform stride.
-// Graph applies forward WHT to Q pre-attention and inverse WHT to FA output, so
-// dequant just returns centroid * norm.
+// TurboQuant K/V blocks. Graph applies forward WHT to Q pre-attention (when K
+// is turbo) and inverse WHT to FA output post-attention (when V is turbo), so
+// dequant returns centroid*norm -- orthogonal Q.K_rot == Q_rot.K_rot.
+// `restrict` + explicit `std430` keeps the driver from assuming a uniform
+// stride across aliased SSBO views at the same binding (the 16-bit-aligned
+// q4/q5/q8 views have ~18-34 byte strides; turbo3 needs a 50-byte stride).
 layout (binding = 1, std430) restrict readonly buffer K_PACKED_TURBO2_0 { block_turbo2_0 data[]; } k_packed_turbo2_0;
 layout (binding = 2, std430) restrict readonly buffer V_PACKED_TURBO2_0 { block_turbo2_0 data[]; } v_packed_turbo2_0;
 layout (binding = 1, std430) restrict readonly buffer K_PACKED_TURBO3_0 { block_turbo3_0 data[]; } k_packed_turbo3_0;
@@ -47,10 +48,12 @@ layout (binding = 2, std430) restrict readonly buffer V_PACKED_TURBO3_0 { block_
 layout (binding = 1, std430) restrict readonly buffer K_PACKED_TURBO4_0 { block_turbo4_0 data[]; } k_packed_turbo4_0;
 layout (binding = 2, std430) restrict readonly buffer V_PACKED_TURBO4_0 { block_turbo4_0 data[]; } v_packed_turbo4_0;
 
+#if !defined(DATA_A_TURBO_KV)
 // Q4_1 and Q5_1 packed32 views: aliased to the same memory as the packed16
 // views, used by the MMQ K-side hot path for fast 4-uint loads.
 layout (binding = 1) readonly buffer K_PACKED_Q4_1_P32 { block_q4_1_packed32 data[]; } k_packed_q4_1_p32;
 layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 data[]; } k_packed_q5_1_p32;
+#endif  // !DATA_A_TURBO_KV
 
 // Per-quant decode bodies are expanded once for the K view set and once for
 // the V view set. The macros take the buffer name as a parameter.
@@ -166,21 +169,50 @@ layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 dat
 // TurboQuant4 dequant: 4-bit indices, 2 per byte. iqs%4==0 means the 4
 // elements span 2 consecutive qs bytes (each holds 2 nibbles).
 #define FA_DEQUANT4_TURBO4_0(BUF) {                                                               \
-    const float c[16] = float[16](                                                                \
-        -0.173926, -0.117195, -0.089527, -0.068756,                                               \
-        -0.051262, -0.035597, -0.020989, -0.006938,                                               \
-         0.006938,  0.020989,  0.035597,  0.051262,                                               \
-         0.068756,  0.089527,  0.117195,  0.173926);                                              \
-    const float norm = float(BUF.data[a_offset + ib].norm);                                       \
-    const uint b0 = uint(BUF.data[a_offset + ib].qs[iqs / 2    ]);                                \
-    const uint b1 = uint(BUF.data[a_offset + ib].qs[iqs / 2 + 1]);                                \
-    const uint i0 = (b0     ) & 0xFu;                                                              \
-    const uint i1 = (b0 >> 4) & 0xFu;                                                              \
-    const uint i2 = (b1     ) & 0xFu;                                                              \
-    const uint i3 = (b1 >> 4) & 0xFu;                                                              \
-    return FLOAT_TYPE(norm) * FLOAT_TYPEV4(c[i0], c[i1], c[i2], c[i3]);                           \
+    const float c[16] = float[16](                                                                 \
+        -0.173926, -0.117195, -0.089527, -0.068756,                                                \
+        -0.051262, -0.035597, -0.020989, -0.006938,                                                \
+         0.006938,  0.020989,  0.035597,  0.051262,                                                \
+         0.068756,  0.089527,  0.117195,  0.173926);                                               \
+    const float norm = float(BUF.data[a_offset + ib].norm);                                        \
+    const uint b0 = uint(BUF.data[a_offset + ib].qs[iqs / 2    ]);                                 \
+    const uint b1 = uint(BUF.data[a_offset + ib].qs[iqs / 2 + 1]);                                 \
+    const uint i0 = (b0     ) & 0xFu;                                                               \
+    const uint i1 = (b0 >> 4) & 0xFu;                                                               \
+    const uint i2 = (b1     ) & 0xFu;                                                               \
+    const uint i3 = (b1 >> 4) & 0xFu;                                                               \
+    return FLOAT_TYPE(norm) * FLOAT_TYPEV4(c[i0], c[i1], c[i2], c[i3]);                            \
 }
 
+#if defined(DATA_A_TURBO2_0)
+// Per-shader-compilation turbo variants: only turbo K/V bindings exist at
+// bindings 1/2 (no f16/q4/q5/q8 aliases) -- eliminates SSBO alias collisions
+// for the symmetric K=V=turbo dispatch where mismatched stride aliases at the
+// same binding caused driver-side mis-strided loads.
+FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
+    if (binding_idx == BINDING_IDX_K) {
+        FA_DEQUANT4_TURBO2_0(k_packed_turbo2_0)
+    } else {
+        FA_DEQUANT4_TURBO2_0(v_packed_turbo2_0)
+    }
+}
+#elif defined(DATA_A_TURBO3_0)
+FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
+    if (binding_idx == BINDING_IDX_K) {
+        FA_DEQUANT4_TURBO3_0(k_packed_turbo3_0)
+    } else {
+        FA_DEQUANT4_TURBO3_0(v_packed_turbo3_0)
+    }
+}
+#elif defined(DATA_A_TURBO4_0)
+FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
+    if (binding_idx == BINDING_IDX_K) {
+        FA_DEQUANT4_TURBO4_0(k_packed_turbo4_0)
+    } else {
+        FA_DEQUANT4_TURBO4_0(v_packed_turbo4_0)
+    }
+}
+#else
 FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
     if (binding_idx == BINDING_IDX_K) {
         switch (FaTypeK) {
@@ -213,3 +245,4 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
     }
     return FLOAT_TYPEV4(0);
 }
+#endif  // DATA_A_TURBO2_0 / DATA_A_TURBO3_0 / DATA_A_TURBO4_0

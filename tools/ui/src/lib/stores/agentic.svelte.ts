@@ -26,12 +26,12 @@ import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import { permissionsStore } from '$lib/stores/permissions.svelte';
-import { BuiltInTool, ToolSource, ToolPermissionDecision } from '$lib/enums';
+import { ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { isAbortError } from '$lib/utils';
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
+import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -86,8 +86,7 @@ function createDefaultSession(): AgenticSession {
 		totalToolCalls: 0,
 		lastError: null,
 		streamingToolCall: null,
-		pendingPermissionRequest: null,
-		executingToolCallId: null
+		pendingPermissionRequest: null
 	};
 }
 
@@ -188,27 +187,23 @@ class AgenticStore {
 	}
 
 	isRunning(conversationId: string): boolean {
-		return this._sessions.get(conversationId)?.isRunning ?? false;
+		return this.getSession(conversationId).isRunning;
 	}
 
 	currentTurn(conversationId: string): number {
-		return this._sessions.get(conversationId)?.currentTurn ?? 0;
+		return this.getSession(conversationId).currentTurn;
 	}
 
 	totalToolCalls(conversationId: string): number {
-		return this._sessions.get(conversationId)?.totalToolCalls ?? 0;
+		return this.getSession(conversationId).totalToolCalls;
 	}
 
 	lastError(conversationId: string): Error | null {
-		return this._sessions.get(conversationId)?.lastError ?? null;
+		return this.getSession(conversationId).lastError;
 	}
 
 	streamingToolCall(conversationId: string): { name: string; arguments: string } | null {
-		return this._sessions.get(conversationId)?.streamingToolCall ?? null;
-	}
-
-	executingToolCallId(conversationId: string): string | null {
-		return this._sessions.get(conversationId)?.executingToolCallId ?? null;
+		return this.getSession(conversationId).streamingToolCall;
 	}
 
 	pendingPermissionRequest(
@@ -288,7 +283,6 @@ class AgenticStore {
 		const hasTools =
 			mcpStore.hasEnabledServers(perChatOverrides) ||
 			toolsStore.builtinTools.length > 0 ||
-			toolsStore.frontendTools.length > 0 ||
 			toolsStore.customTools.length > 0;
 		return {
 			enabled: hasTools && DEFAULT_AGENTIC_CONFIG.enabled,
@@ -495,7 +489,6 @@ class AgenticStore {
 			onCompletionId,
 			onAssistantTurnComplete,
 			createToolResultMessage,
-			updateToolResultMessage,
 			createAssistantMessage,
 			onFlowComplete,
 			onTimings,
@@ -581,7 +574,6 @@ class AgenticStore {
 						onToolCallChunk: (serialized: string) => {
 							try {
 								turnToolCalls = JSON.parse(serialized) as ApiChatCompletionToolCall[];
-
 								onToolCallsStreaming?.(turnToolCalls);
 
 								if (turnToolCalls.length > 0 && turnToolCalls[0]?.function) {
@@ -657,21 +649,6 @@ class AgenticStore {
 				);
 				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 				throw normalizedError;
-			}
-
-			// If the abort landed while ChatService.sendMessage was still resolving, the
-			// outer catch above never fires because ChatService swallows the AbortError
-			// and returns normally. Bail out here so a half-received tool_call (truncated
-			// arguments JSON) is not persisted as if it were complete.
-			if (signal?.aborted) {
-				await onAssistantTurnComplete?.(
-					turnContent,
-					turnReasoningContent || undefined,
-					this.buildFinalTimings(capturedTimings, agenticTimings),
-					undefined
-				);
-				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
-				return;
 			}
 
 			// === Steering check: if a user message was queued during this turn, exit the flow.
@@ -791,49 +768,15 @@ class AgenticStore {
 				const toolStartTime = performance.now();
 				const toolSource = toolsStore.getToolSource(toolName);
 
-				let result = '';
+				let result: string;
 				let toolSuccess = true;
-				let createdToolResultMessageId: string | null = null;
-
-				// Streaming tools (currently only exec_shell_command): mark
-				// the session so the matching renderer can switch to live mode.
-				// Cleared unconditionally below.
-				this.updateSession(conversationId, { executingToolCallId: toolCall.id });
 
 				if (permission === ToolPermissionDecision.DENY) {
 					result = 'Tool execution was denied by the user.';
 					toolSuccess = false;
 				} else {
 					try {
-						if (
-							toolSource === ToolSource.BUILTIN &&
-							toolName === BuiltInTool.EXEC_SHELL_COMMAND &&
-							createToolResultMessage &&
-							updateToolResultMessage
-						) {
-							const args = this.parseToolArguments(toolCall.function.arguments);
-							const msg = await createToolResultMessage(toolCall.id, '');
-							createdToolResultMessageId = msg.id;
-
-							let accumulated = '';
-							for await (const ev of ToolsService.streamTool(toolName, args, signal)) {
-								if (ev.chunk !== null) {
-									accumulated += ev.chunk;
-									await updateToolResultMessage(msg.id, accumulated);
-								}
-								if (ev.done) {
-									if (ev.error) {
-										accumulated = accumulated
-											? `${accumulated}\nError: ${ev.error}`
-											: `Error: ${ev.error}`;
-										await updateToolResultMessage(msg.id, accumulated);
-										toolSuccess = false;
-									}
-									break;
-								}
-							}
-							result = accumulated;
-						} else if (toolSource === ToolSource.BUILTIN) {
+						if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
 							const executionResult = await ToolsService.executeTool(toolName, args, signal);
 
@@ -858,23 +801,13 @@ class AgenticStore {
 						}
 					} catch (error) {
 						if (isAbortError(error)) {
-							this.updateSession(conversationId, { executingToolCallId: null });
 							onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 							return;
 						}
-						// Carry the partial stream contents already mirrored to the UI -
-						// they show up as live output even if the stream broke off mid-run.
-						result = result
-							? `${result}\nError: ${error instanceof Error ? error.message : String(error)}`
-							: `Error: ${error instanceof Error ? error.message : String(error)}`;
+						result = `Error: ${error instanceof Error ? error.message : String(error)}`;
 						toolSuccess = false;
-						if (createdToolResultMessageId && updateToolResultMessage) {
-							await updateToolResultMessage(createdToolResultMessageId, result);
-						}
 					}
 				}
-
-				this.updateSession(conversationId, { executingToolCallId: null });
 
 				const toolDurationMs = performance.now() - toolStartTime;
 				const toolTiming: ChatMessageToolCallTiming = {
@@ -896,19 +829,9 @@ class AgenticStore {
 
 				const { cleanedResult, attachments } = this.extractBase64Attachments(result);
 
-				// For streaming tools the result message was created empty
-				// at the start of execution and updated in place as chunks
-				// arrived via updateToolResultMessage. Skip the second
-				// create call - just attach any base64 attachments found in
-				// the final accumulator (rare, since chunks usually don't
-				// carry image data URIs) and emit the attachments callback.
+				// Create the tool result message in the DB
 				let toolResultMessage: DatabaseMessage | undefined;
-				if (createdToolResultMessageId) {
-					toolResultMessage = { id: createdToolResultMessageId } as DatabaseMessage;
-					if (attachments.length > 0 && updateToolResultMessage) {
-						await updateToolResultMessage(createdToolResultMessageId, cleanedResult, attachments);
-					}
-				} else if (createToolResultMessage) {
+				if (createToolResultMessage) {
 					toolResultMessage = await createToolResultMessage(
 						toolCall.id,
 						cleanedResult,
@@ -1003,7 +926,7 @@ class AgenticStore {
 			return { cleanedResult: result, attachments: [] };
 		}
 
-		const lines = result.split(NEWLINE);
+		const lines = result.split(NEWLINE_SEPARATOR);
 		const attachments: DatabaseMessageExtra[] = [];
 		let attachmentIndex = 0;
 
@@ -1034,7 +957,7 @@ class AgenticStore {
 			return line;
 		});
 
-		return { cleanedResult: cleanedLines.join(NEWLINE), attachments };
+		return { cleanedResult: cleanedLines.join(NEWLINE_SEPARATOR), attachments };
 	}
 
 	private buildAttachmentName(mimeType: string, index: number): string {
@@ -1108,8 +1031,4 @@ export function agenticClearSteeringMessage(conversationId: string) {
 
 export function agenticIsAnyRunning() {
 	return agenticStore.isAnyRunning;
-}
-
-export function agenticExecutingToolCallId(conversationId: string) {
-	return agenticStore.executingToolCallId(conversationId);
 }

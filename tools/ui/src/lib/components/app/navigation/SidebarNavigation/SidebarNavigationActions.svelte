@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { Search } from '@lucide/svelte';
@@ -86,7 +85,7 @@
 </script>
 
 {#snippet itemIcon(IconComponent: Component)}
-	<IconComponent class={ICON_CLASS_DEFAULT} />
+	<IconComponent class="h-4 w-4" />
 {/snippet}
 
 {#if isSearchModeActive}
@@ -119,7 +118,9 @@
 					: onSearchClick}
 			{@const itemTransition = {
 				duration: ICON_STRIP_TRANSITION_DURATION,
-				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
+				delay: !initialized
+					? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
+					: 0,
 				easing: circIn
 			}}
 
@@ -138,8 +139,10 @@
 							{@render itemIcon(item.icon)}
 
 							{#if showIcons}
-								<span in:fade={itemTransition} out:fade={itemTransition} class="min-w-0 truncate"
-									>{item.tooltip}</span
+								<span
+									in:fade={{ duration: 150, easing: circIn, delay: 50 }}
+									out:fade={{ duration: 100 }}
+									class="min-w-0 truncate">{item.tooltip}</span
 								>
 							{/if}
 						</span>
@@ -167,7 +170,9 @@
 					: onSearchClick}
 			{@const itemTransition = {
 				duration: ICON_STRIP_TRANSITION_DURATION,
-				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
+				delay: !initialized
+					? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
+					: 0,
 				easing: circIn
 			}}
 
@@ -178,7 +183,7 @@
 						tooltip={item.tooltip}
 						tooltipSide={TooltipSide.RIGHT}
 						size="lg"
-						iconSize={ICON_CLASS_DEFAULT}
+						iconSize="h-4 w-4"
 						class="h-9 w-9 rounded-full hover:bg-accent! {isActive
 							? 'bg-accent text-accent-foreground'
 							: ''}"

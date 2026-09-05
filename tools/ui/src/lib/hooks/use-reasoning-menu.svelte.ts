@@ -17,7 +17,6 @@ import { isRouterMode } from '$lib/stores/server.svelte';
 export interface UseReasoningMenuReturn {
 	readonly modelSupportsThinking: boolean;
 	readonly thinkingEnabled: boolean;
-	readonly isOff: boolean;
 	readonly currentEffort: ReasoningEffort;
 	readonly levels: ReasoningEffortLevel[];
 	isSelected(level: ReasoningEffortLevel): boolean;
@@ -60,10 +59,8 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 		return supportsThinking() || modelSupportsThinkingFromMessages;
 	});
 
+	const thinkingEnabled = $derived(conversationsStore.getThinkingEnabled());
 	const currentEffort = $derived(conversationsStore.getReasoningEffort());
-	const thinkingEnabled = $derived(
-		currentEffort !== ReasoningEffort.OFF && currentEffort !== ReasoningEffort.DEFAULT
-	);
 
 	return {
 		get modelSupportsThinking() {
@@ -72,9 +69,6 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 		get thinkingEnabled() {
 			return thinkingEnabled;
 		},
-		get isOff() {
-			return currentEffort === ReasoningEffort.OFF;
-		},
 		get currentEffort() {
 			return currentEffort;
 		},
@@ -82,15 +76,20 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 			return REASONING_EFFORT_LEVELS;
 		},
 		isSelected(level: ReasoningEffortLevel): boolean {
-			return currentEffort === level.value;
+			if (level.isOff) return !thinkingEnabled;
+			return thinkingEnabled && currentEffort === level.value;
 		},
 		tokenLabel(level: ReasoningEffortLevel): string | null {
-			if (level.value === ReasoningEffort.DEFAULT) return 'Model default';
+			if (level.isOff) return null;
 			const tokens = REASONING_EFFORT_TOKENS[level.value];
-			if (tokens === undefined) return null;
 			return tokens === -1 ? 'Unlimited' : `Max ${tokens.toLocaleString()} tokens`;
 		},
 		select(level: ReasoningEffortLevel): void {
+			if (level.isOff) {
+				conversationsStore.setThinkingEnabled(false);
+				return;
+			}
+			conversationsStore.setThinkingEnabled(true);
 			conversationsStore.setReasoningEffort(level.value as ReasoningEffort);
 		}
 	};

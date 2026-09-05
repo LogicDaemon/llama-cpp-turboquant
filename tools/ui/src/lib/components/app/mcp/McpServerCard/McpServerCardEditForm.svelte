@@ -7,23 +7,13 @@
 		serverId: string;
 		serverUrl: string;
 		serverUseProxy?: boolean;
-		/** Current automatic label, prefilled so the user can customize it. */
-		serverLabel?: string;
-		onSave: (url: string, headers: string, useProxy: boolean, name?: string) => void;
+		onSave: (url: string, headers: string, useProxy: boolean) => void;
 		onCancel: () => void;
 	}
 
-	let {
-		serverId,
-		serverUrl,
-		serverUseProxy = false,
-		serverLabel = '',
-		onSave,
-		onCancel
-	}: Props = $props();
+	let { serverId, serverUrl, serverUseProxy = false, onSave, onCancel }: Props = $props();
 
 	let editUrl = $derived(serverUrl);
-	let editName = $derived(serverLabel);
 	let editHeaders = $state('');
 	let editUseProxy = $derived(serverUseProxy);
 
@@ -44,12 +34,7 @@
 
 	function handleSave() {
 		if (!canSave) return;
-
-		// An unchanged prefill keeps following the automatic label; only an
-		// actual edit becomes a persisted custom display name.
-		const name = editName.trim() !== serverLabel.trim() ? editName.trim() : undefined;
-
-		onSave(editUrl.trim(), editHeaders.trim(), editUseProxy, name);
+		onSave(editUrl.trim(), editHeaders.trim(), editUseProxy);
 	}
 
 	function handleSubmit(event: SubmitEvent) {
@@ -57,11 +42,10 @@
 		handleSave();
 	}
 
-	export function setInitialValues(url: string, headers: string, useProxy: boolean, name = '') {
+	export function setInitialValues(url: string, headers: string, useProxy: boolean) {
 		editUrl = url;
 		editHeaders = headers;
 		editUseProxy = useProxy;
-		editName = name;
 	}
 </script>
 
@@ -71,8 +55,6 @@
 
 		<McpServerForm
 			url={editUrl}
-			name={editName}
-			onNameChange={(v) => (editName = v)}
 			headers={editHeaders}
 			useProxy={editUseProxy}
 			onUrlChange={(v) => (editUrl = v)}

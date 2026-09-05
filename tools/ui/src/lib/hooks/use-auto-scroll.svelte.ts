@@ -84,11 +84,11 @@ export class AutoScrollController {
 	}
 
 	/**
-	 * Scrolls the container to the bottom instantly.
+	 * Scrolls the container to the bottom.
 	 */
-	scrollToBottom(): void {
+	scrollToBottom(behavior: ScrollBehavior = 'smooth'): void {
 		if (this._disabled || !this._container) return;
-		this._container.scrollTop = this._container.scrollHeight;
+		this._container.scrollTo({ top: this._container.scrollHeight, behavior });
 	}
 
 	/**

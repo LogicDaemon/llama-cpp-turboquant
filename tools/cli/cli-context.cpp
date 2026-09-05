@@ -624,14 +624,10 @@ int cli_context::run() {
         generated_content content;
         generate_completion(content, timings);
 
-        json assistant_msg = {
+        impl->messages.push_back({
             {"role",    "assistant"},
             {"content", content.content}
-        };
-        if (!content.reasoning.empty()) {
-            assistant_msg["reasoning_content"] = content.reasoning;
-        }
-        impl->messages.push_back(std::move(assistant_msg));
+        });
 
         if (output_file) {
             std::string out_content = "Assistant:\n";

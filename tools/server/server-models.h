@@ -16,6 +16,13 @@
 #include <string>
 #include <unordered_map>
 
+// Signals between router parent and model child processes.
+// Also used by server.cpp (the child process entry point).
+// note: regular child state reports use CMD_CHILD_TO_ROUTER_STATE (see
+// server-models.cpp); ERROR is emitted by the child's ggml abort callback.
+#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
+#define CMD_CHILD_TO_ROUTER_ERROR "cmd_child_to_router:error:"
+
 /**
  * state diagram:
  *
@@ -98,6 +105,19 @@ struct server_model_meta {
         return status == SERVER_MODEL_STATUS_UNLOADED && exit_code != 0;
     }
 
+    // true when the child was killed by a signal (e.g. SIGABRT from OOM,
+    // SIGTERM from force-kill).  exit_code is the negated signal number.
+    bool is_signaled() const {
+        return status == SERVER_MODEL_STATUS_UNLOADED && exit_code < 0;
+    }
+
+    // the signal number if is_signaled(), 0 otherwise
+    int exit_signal() const {
+        return is_signaled() ? -exit_code : 0;
+    }
+
+    std::string last_error = {}; // error message from CMD_CHILD_TO_ROUTER_ERROR or GGML_ABORT
+
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
     void update_caps();
 };
@@ -119,7 +139,6 @@ private:
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
 
-    // for stopping models
     std::condition_variable cv_stop;
     std::set<std::string> stopping_models;
 
@@ -134,24 +153,12 @@ private:
     // proxy_request forwards a POST carrying an X-Conversation-Id. best effort: a stale entry just
     // makes the child answer not found and the client recovers. owns its lock, one mutex per struct
     struct conv_model_tracker {
-        // returns the ticket of this registration, 0 when nothing was registered. erasing or
-        // replacing the entry invalidates the ticket, which is how a stop cancels a request
-        // parked in the model load wait
-        uint64_t remember(const std::string & conv_id, const std::string & model) {
+        void remember(const std::string & conv_id, const std::string & model) {
             if (conv_id.empty() || model.empty()) {
-                return 0;
+                return;
             }
             std::lock_guard<std::mutex> lock(mu);
-            uint64_t ticket = next_ticket++;
-            map[conv_id] = { model, ticket };
-            return ticket;
-        }
-
-        // false means a stop erased the entry or a newer request replaced it
-        bool alive(const std::string & conv_id, uint64_t ticket) {
-            std::lock_guard<std::mutex> lock(mu);
-            auto it = map.find(conv_id);
-            return it != map.end() && it->second.ticket == ticket;
+            map[conv_id] = model;
         }
 
         std::optional<std::string> lookup(const std::string & conv_id) {
@@ -163,7 +170,7 @@ private:
             if (it == map.end()) {
                 return std::nullopt;
             }
-            return it->second.model;
+            return it->second;
         }
 
         void forget(const std::string & conv_id) {
@@ -175,13 +182,8 @@ private:
         }
 
       private:
-        struct entry_t {
-            std::string model;
-            uint64_t    ticket;
-        };
-        std::mutex                               mu;
-        uint64_t                                 next_ticket = 1;
-        std::unordered_map<std::string, entry_t> map;
+        std::mutex                                   mu;
+        std::unordered_map<std::string, std::string> map;
     };
 
     common_preset_context ctx_preset;
@@ -250,6 +252,10 @@ public:
     void update_status(const std::string & name, const update_status_args & args);
     void update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok = true);
 
+    // fork: record a structured child error (CMD_CHILD_TO_ROUTER_ERROR) so it
+    // can be reported via /v1/models
+    void update_last_error(const std::string & name, const std::string & error);
+
     // remove a cache model from disk and update the list (thread-safe)
     // note: only cache models can be removed; returns false if the model doesn't exist or is not a cache model
     bool remove(const std::string & name);
@@ -266,7 +272,7 @@ public:
     bool ensure_model_ready(const std::string & name);
 
     // proxy an HTTP request to the model instance
-    server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached = false);
+    server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used);
 
     // handle message sent from server_child::notify_to_router()
     // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string

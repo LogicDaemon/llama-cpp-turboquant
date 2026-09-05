@@ -26,7 +26,6 @@
 #include "dmmv.hpp"
 #include "element_wise.hpp"
 #include "fattn.hpp"
-#include "fusion.hpp"
 #include "gated_delta_net.hpp"
 #include "gla.hpp"
 #include "im2col.hpp"

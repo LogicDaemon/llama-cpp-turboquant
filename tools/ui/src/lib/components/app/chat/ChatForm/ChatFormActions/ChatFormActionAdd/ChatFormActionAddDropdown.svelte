@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Plus, File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -48,9 +47,6 @@
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
-	// The system message action moves focus to the message editor, so the menu
-	// must not restore focus to the trigger on close
-	let suppressCloseAutoFocus = false;
 
 	function handleMcpSettingsClick() {
 		dropdownOpen = false;
@@ -74,9 +70,7 @@
 
 <div class="flex items-center gap-1 {className}">
 	<DropdownMenu.Root bind:open={dropdownOpen}>
-		<!-- ignoreNonKeyboardFocus prevents the tooltip from flashing when the
-		     menu closes and focus returns to the trigger -->
-		<Tooltip.Root ignoreNonKeyboardFocus>
+		<Tooltip.Root>
 			<Tooltip.Trigger>
 				{#snippet child({ props })}
 					<DropdownMenu.Trigger
@@ -89,7 +83,7 @@
 					>
 						<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
 
-						<Plus class={ICON_CLASS_DEFAULT} />
+						<Plus class="h-4 w-4" />
 					</DropdownMenu.Trigger>
 				{/snippet}
 			</Tooltip.Trigger>
@@ -99,23 +93,14 @@
 			</Tooltip.Content>
 		</Tooltip.Root>
 
-		<DropdownMenu.Content
-			align="start"
-			class="w-52"
-			onCloseAutoFocus={(e) => {
-				if (suppressCloseAutoFocus) {
-					suppressCloseAutoFocus = false;
-					e.preventDefault();
-				}
-			}}
-		>
+		<DropdownMenu.Content align="start" class="w-52">
 			<ChatFormActionAddReasoningSubmenu />
 
 			<DropdownMenu.Separator />
 
 			<DropdownMenu.Sub>
 				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-					<File class={ICON_CLASS_DEFAULT} />
+					<File class="h-4 w-4" />
 
 					<span>Add files</span>
 				</DropdownMenu.SubTrigger>
@@ -128,7 +113,7 @@
 								class="{item.class ?? ''} flex cursor-pointer items-center gap-2"
 								onclick={() => attachmentMenu.callbacks[item.action]()}
 							>
-								<item.icon class={ICON_CLASS_DEFAULT} />
+								<item.icon class="h-4 w-4" />
 
 								<span>{item.label}</span>
 							</DropdownMenu.Item>
@@ -141,7 +126,7 @@
 												class="{item.class ?? ''} flex items-center gap-2"
 												disabled
 											>
-												<item.icon class={ICON_CLASS_DEFAULT} />
+												<item.icon class="h-4 w-4" />
 
 												<span>{item.label}</span>
 											</DropdownMenu.Item>
@@ -160,12 +145,9 @@
 
 			<DropdownMenu.Item
 				class="flex cursor-pointer items-center gap-2"
-				onclick={() => {
-					suppressCloseAutoFocus = true;
-					onSystemPromptClick?.();
-				}}
+				onclick={onSystemPromptClick}
 			>
-				<MessageSquare class={ICON_CLASS_DEFAULT} />
+				<MessageSquare class="h-4 w-4" />
 
 				<span>System Message</span>
 			</DropdownMenu.Item>
@@ -181,7 +163,7 @@
 					class="flex cursor-pointer items-center gap-2"
 					onclick={onMcpPromptClick}
 				>
-					<Zap class={ICON_CLASS_DEFAULT} />
+					<Zap class="h-4 w-4" />
 
 					<span>MCP Prompt</span>
 				</DropdownMenu.Item>
@@ -192,7 +174,7 @@
 					class="flex cursor-pointer items-center gap-2"
 					onclick={onMcpResourcesClick}
 				>
-					<FolderOpen class={ICON_CLASS_DEFAULT} />
+					<FolderOpen class="h-4 w-4" />
 
 					<span>MCP Resources</span>
 				</DropdownMenu.Item>

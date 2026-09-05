@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import type { Snippet } from 'svelte';
 
@@ -72,7 +71,7 @@
 		disabled={!canScrollLeft}
 		aria-label="Scroll left"
 	>
-		<ChevronLeft class={ICON_CLASS_DEFAULT} />
+		<ChevronLeft class="h-4 w-4" />
 	</button>
 
 	<div
@@ -89,6 +88,6 @@
 		disabled={!canScrollRight}
 		aria-label="Scroll right"
 	>
-		<ChevronRight class={ICON_CLASS_DEFAULT} />
+		<ChevronRight class="h-4 w-4" />
 	</button>
 </div>

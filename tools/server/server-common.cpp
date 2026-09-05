@@ -548,6 +548,39 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
     return true;
 }
 
+// fork: process a media chunk on an extra context (used to mirror mtmd media
+// evaluation onto the draft context for mmproj-compatible speculative decoding)
+int32_t server_tokens::process_chunk(
+            llama_context * ctx,
+            mtmd_context * mctx,
+            size_t idx,
+            llama_pos pos,
+            int32_t seq_id,
+            size_t & n_tokens_out) const {
+    const auto & chunk = find_chunk(idx);
+    const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
+                        ? "image" : "audio";
+    SRV_INF("processing %s...\n", name);
+    int32_t n_batch = llama_n_batch(ctx);
+    int64_t t0 = ggml_time_ms();
+    llama_pos new_n_past; // unused for now
+    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
+        chunk.get(),
+        pos,
+        seq_id,
+        n_batch,
+        true, // logits last
+        &new_n_past);
+    SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
+    if (result != 0) {
+        LOG_ERR("mtmd_helper_eval failed with status %d", result);
+        n_tokens_out = 0;
+        return result;
+    }
+    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
+    return 0;
+}
+
 server_tokens server_tokens::clone() const {
     server_tokens res;
     res.has_mtmd = has_mtmd;
@@ -1086,14 +1119,6 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
-    // Parse also the OAI "reasoning_effort": "none" specific value
-    if (body.contains("reasoning_effort")) {
-        auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
-        if (reasoning_effort == "none") {
-            inputs.enable_thinking = false;
-        } // other reasoning_effort values are model-specific and not yet handled
-    }
-
     inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
@@ -1131,10 +1156,10 @@ json oaicompat_chat_params_parse(
             reasoning_budget = opt.reasoning_budget;
         }
 
-        if (!chat_params.thinking_end_tags.empty()) {
+        if (!chat_params.thinking_end_tag.empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
-            llama_params["reasoning_budget_end_tags"] = chat_params.thinking_end_tags;
+            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
             llama_params["reasoning_budget_message"] = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }

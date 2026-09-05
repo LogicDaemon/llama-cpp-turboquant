@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { PencilRuler, ChevronDown, ChevronRight, Loader2, Info, Check } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
@@ -16,7 +15,7 @@
 
 <DropdownMenu.Sub onOpenChange={(open) => open && toolsPanel.handleOpen()}>
 	<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-		<PencilRuler class={ICON_CLASS_DEFAULT} />
+		<PencilRuler class="h-4 w-4" />
 
 		<span>Tools</span>
 	</DropdownMenu.SubTrigger>
@@ -25,14 +24,14 @@
 		{#if toolsPanel.totalToolCount === 0}
 			{#if toolsStore.loading}
 				<div class="px-3 py-4 text-center text-sm text-muted-foreground">
-					<Loader2 class="mx-auto mb-1 {ICON_CLASS_DEFAULT} animate-spin" />
+					<Loader2 class="mx-auto mb-1 h-4 w-4 animate-spin" />
 
 					Loading tools...
 				</div>
 			{:else if toolsStore.isToolsEndpointUnreachable}
 				<div class="grid gap-2.5 px-3 py-4 text-sm text-muted-foreground">
 					<span class="flex gap-2">
-						<Info class="mt-0.5 {ICON_CLASS_DEFAULT} shrink-0" />
+						<Info class="mt-0.5 h-4 w-4 shrink-0" />
 
 						<span>
 							Run llama-server with <code>{CLI_FLAGS.TOOLS}</code> flag to enable
@@ -42,7 +41,7 @@
 					</span>
 
 					<span class="flex gap-2">
-						<Info class="mt-0.5 {ICON_CLASS_DEFAULT} shrink-0" />
+						<Info class="mt-0.5 h-4 w-4 shrink-0" />
 
 						<span>
 							{hasMcpServersAvailable ? 'Enable' : 'Add'} MCP Server(s) to access
@@ -55,7 +54,7 @@
 				<div class="px-3 py-4 text-center text-sm text-muted-foreground">Failed to load tools</div>
 			{:else if toolsPanel.noToolsInfoMessage}
 				<div class="flex gap-2 px-3 py-4 text-sm text-muted-foreground">
-					<Info class="mt-0.5 {ICON_CLASS_DEFAULT} shrink-0" />
+					<Info class="mt-0.5 h-4 w-4 shrink-0" />
 
 					<span>{toolsPanel.noToolsInfoMessage}</span>
 				</div>
@@ -64,14 +63,14 @@
 			{/if}
 		{:else}
 			<div class="max-h-80 overflow-y-auto p-2 pr-1">
-				{#each toolsPanel.activeGroups as group (group.key)}
-					{@const isExpanded = toolsPanel.expandedGroups.has(group.key)}
+				{#each toolsPanel.activeGroups as group (group.label)}
+					{@const isExpanded = toolsPanel.expandedGroups.has(group.label)}
 					{@const checked = toolsPanel.isGroupChecked(group)}
 					{@const favicon = toolsPanel.getFavicon(group)}
 
 					<Collapsible.Root
 						open={isExpanded}
-						onOpenChange={() => toolsPanel.toggleGroupExpanded(group.key)}
+						onOpenChange={() => toolsPanel.toggleGroupExpanded(group.label)}
 					>
 						<div class="flex items-center gap-1">
 							<Collapsible.Trigger
@@ -88,7 +87,7 @@
 										<img
 											src={favicon}
 											alt=""
-											class="{ICON_CLASS_DEFAULT} shrink-0 rounded-sm"
+											class="h-4 w-4 shrink-0 rounded-sm"
 											onerror={(e) => {
 												(e.currentTarget as HTMLImageElement).style.display = 'none';
 											}}
@@ -109,8 +108,8 @@
 										<Checkbox
 											{...props}
 											{checked}
-											onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
-											class="mr-2 {ICON_CLASS_DEFAULT} shrink-0"
+											onCheckedChange={() => toolsPanel.toggleGroupByLabel(group.label)}
+											class="mr-2 h-4 w-4 shrink-0"
 										/>
 									{/snippet}
 								</Tooltip.Trigger>

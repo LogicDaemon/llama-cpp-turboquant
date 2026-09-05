@@ -1,12 +1,5 @@
 import { config } from '$lib/stores/settings.svelte';
-import {
-	AUTHORIZATION_HEADER,
-	BEARER_PREFIX,
-	CONTENT_TYPE_HEADER,
-	CORS_PROXY_HEADER_PREFIX,
-	REDACTED_HEADERS
-} from '$lib/constants';
-import { MimeTypeApplication } from '$lib/enums';
+import { CORS_PROXY_HEADER_PREFIX, REDACTED_HEADERS } from '$lib/constants';
 import { redactValue } from './redact';
 
 /**
@@ -17,7 +10,7 @@ export function getAuthHeaders(): Record<string, string> {
 	const currentConfig = config();
 	const apiKey = currentConfig.apiKey?.toString().trim();
 
-	return apiKey ? { [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey}` } : {};
+	return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
 }
 
 /**
@@ -25,7 +18,7 @@ export function getAuthHeaders(): Record<string, string> {
  */
 export function getJsonHeaders(): Record<string, string> {
 	return {
-		[CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON,
+		'Content-Type': 'application/json',
 		...getAuthHeaders()
 	};
 }

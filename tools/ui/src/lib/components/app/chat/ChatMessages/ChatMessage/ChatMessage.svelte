@@ -2,12 +2,12 @@
 	import { goto } from '$app/navigation';
 	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
 	import { MessageRole, AttachmentType, AgenticSectionType } from '$lib/enums';
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatMessageAssistant,
 		ChatMessageUser,
@@ -47,14 +47,7 @@
 		assistantMessages: number;
 		messageTypes: string[];
 	} | null>(null);
-	// The system message placeholder must never surface as editable content; keeping
-	// it in the derived (not just in handleEdit) guards against prop invalidation
-	// reverting the override while editing
-	let editedContent = $derived(
-		message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER
-			? ''
-			: message.content
-	);
+	let editedContent = $derived(message.content);
 
 	let rawEditContent = $derived.by(() => {
 		if (message.role !== MessageRole.ASSISTANT) return undefined;
@@ -273,12 +266,6 @@
 		chatActions.navigateToSibling(siblingId);
 	}
 
-	// After the system message flow ends, hand focus to the main chat form
-	function focusMainChatForm() {
-		if (isMobile.current) return;
-		document.querySelector<HTMLTextAreaElement>('.chat-screen-form-wrapper textarea')?.focus();
-	}
-
 	async function handleSaveEdit() {
 		if (message.role === MessageRole.SYSTEM) {
 			// System messages: update in place without branching
@@ -290,8 +277,6 @@
 				isEditing = false;
 				if (conversationDeleted) {
 					goto(ROUTES.START);
-				} else {
-					focusMainChatForm();
 				}
 				return;
 			}
@@ -301,7 +286,6 @@
 			if (index !== -1) {
 				conversationsStore.updateMessageAtIndex(index, { content: newContent });
 			}
-			focusMainChatForm();
 		} else if (message.role === MessageRole.USER) {
 			const finalExtras = await getMergedExtras();
 			chatActions.editWithBranching(message, editedContent.trim(), finalExtras);
@@ -344,7 +328,7 @@
 	}
 </script>
 
-<div class="chat-message">
+<div use:fadeInView class="chat-message">
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem
 			bind:textareaElement
@@ -400,6 +384,7 @@
 			{isLastAssistantMessage}
 			{message}
 			{toolMessages}
+			messageContent={message.content}
 			onConfirmDelete={handleConfirmDelete}
 			onContinue={handleContinue}
 			onCopy={handleCopy}
@@ -414,15 +399,3 @@
 		/>
 	{/if}
 </div>
-
-<style>
-	/*
-	 * The browser skips layout and paint for messages outside the
-	 * viewport. contain-intrinsic-size reuses the last rendered size
-	 * once known; 500px sizes messages that have never been rendered.
-	 */
-	.chat-message {
-		content-visibility: auto;
-		contain-intrinsic-size: auto 500px;
-	}
-</style>

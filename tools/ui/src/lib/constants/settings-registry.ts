@@ -54,34 +54,6 @@ const COLOR_MODE_OPTIONS: Array<{ value: string; label: string; icon: Component 
 	{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
 ];
 
-// Shared options for the title-generation radio group. Both paired registry entries
-// (USE_FIRST_LINE, USE_LLM) reference this list so labels stay in lockstep.
-const TITLE_GENERATION_RADIO_OPTIONS: Array<{
-	value: string;
-	label: string;
-	key: string;
-	isExperimental?: boolean;
-}> = [
-	{
-		value: 'firstLine',
-		label: 'Use first non-empty line for the conversation title',
-		key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE
-	},
-	{
-		value: 'llm',
-		label: 'Generate title with LLM',
-		key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
-		isExperimental: true
-	}
-];
-
-// Common shape for the conversation title radio entry.
-const TITLE_GENERATION_BASE = {
-	type: SettingsFieldType.RADIO,
-	section: SETTINGS_SECTION_SLUGS.GENERAL,
-	radioOptions: TITLE_GENERATION_RADIO_OPTIONS
-} as const;
-
 const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 	[SETTINGS_SECTION_SLUGS.GENERAL]: {
 		title: SETTINGS_SECTION_TITLES.GENERAL,
@@ -95,7 +67,8 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: ColorMode.SYSTEM,
 				type: SettingsFieldType.SELECT,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				options: COLOR_MODE_OPTIONS
+				options: COLOR_MODE_OPTIONS,
+				sync: { serverKey: SETTINGS_KEYS.THEME, paramType: SyncableParameterType.STRING }
 			},
 			{
 				key: SETTINGS_KEYS.API_KEY,
@@ -111,7 +84,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'The starting message that defines how model should behave.',
 				defaultValue: '',
 				type: SettingsFieldType.TEXTAREA,
-				section: SETTINGS_SECTION_SLUGS.GENERAL
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.SYSTEM_MESSAGE,
+					paramType: SyncableParameterType.STRING
+				}
 			},
 			{
 				key: SETTINGS_KEYS.PASTE_LONG_TEXT_TO_FILE_LEN,
@@ -119,7 +96,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
 				defaultValue: 2500,
 				type: SettingsFieldType.INPUT,
-				section: SETTINGS_SECTION_SLUGS.GENERAL
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.PASTE_LONG_TEXT_TO_FILE_LEN,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SEND_ON_ENTER,
@@ -127,16 +108,23 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Use Enter to send messages and Shift + Enter for new lines. When disabled, use Ctrl/Cmd + Enter.',
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.GENERAL
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.SEND_ON_ENTER,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
-				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
-				label: 'Show microphone on empty input',
-				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+				key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
+				label: 'Copy text attachments as plain text',
+				help: 'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				isExperimental: true
+				sync: {
+					serverKey: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
@@ -145,14 +133,60 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				isExperimental: true
+				isExperimental: true,
+				sync: {
+					serverKey: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
-				...TITLE_GENERATION_BASE,
+				key: SETTINGS_KEYS.PDF_AS_IMAGE,
+				label: 'Parse PDF as image',
+				help: 'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.PDF_AS_IMAGE,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
+				key: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
+				label: 'Ask for confirmation before changing conversation title',
+				help: 'Ask for confirmation before automatically changing conversation title when editing the first message.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
-				label: 'Conversation title',
-				help: 'Choose how conversation titles are generated. The first non-empty line uses a fast deterministic rule; the LLM option uses a model-generated title from the first message exchange.',
-				defaultValue: true
+				label: 'Use first non-empty line for conversation title',
+				help: 'Use only the first non-empty line of the prompt to generate the conversation title.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
+				key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
+				label: 'Use LLM to generate conversation title',
+				help: 'Use the LLM to automatically generate conversation titles based on the first message exchange.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				isExperimental: true,
+				sync: {
+					serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.TITLE_GENERATION_PROMPT,
@@ -161,23 +195,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: TITLE_GENERATION.DEFAULT_PROMPT,
 				type: SettingsFieldType.TEXTAREA,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				dependsOn: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM
-			},
-			{
-				key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
-				label: 'Copy text attachments as plain text',
-				help: 'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.GENERAL
-			},
-			{
-				key: SETTINGS_KEYS.PDF_AS_IMAGE,
-				label: 'Parse PDF as image',
-				help: 'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.GENERAL
+				sync: {
+					serverKey: SETTINGS_KEYS.TITLE_GENERATION_PROMPT,
+					paramType: SyncableParameterType.STRING
+				}
 			},
 			{
 				key: SETTINGS_KEYS.MAX_IMAGE_RESOLUTION,
@@ -185,7 +206,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Images larger than this will be resized before sending to server. Set to 0 to disable.',
 				defaultValue: 0,
 				type: SettingsFieldType.INPUT,
-				section: SETTINGS_SECTION_SLUGS.GENERAL
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.MAX_IMAGE_RESOLUTION,
+					paramType: SyncableParameterType.NUMBER
+				}
 			}
 		]
 	},
@@ -198,18 +223,13 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				key: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 				label: 'Show message generation statistics',
 				help: 'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
-			},
-			{
-				key: SETTINGS_KEYS.SHOW_AGENTIC_TURN_STATS,
-				label: 'Show statistics for individual agentic turns',
-				help: 'Display per-turn statistics (tokens, duration) under each turn in agentic responses. Shown only when "Show message generation statistics" is enabled.',
-				defaultValue: false,
+				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				dependsOn: SETTINGS_KEYS.SHOW_MESSAGE_STATS
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
@@ -217,15 +237,36 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Expand thought process by default when generating messages.',
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
-				key: SETTINGS_KEYS.ALWAYS_SHOW_TOOL_CALL_CONTENT,
-				label: 'Always show tool call content',
+				key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
+				label: 'Show tool call in progress',
 				help: 'Automatically expand tool call details while executing and keep them expanded after completion.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
+				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
+				label: 'Show microphone on empty input',
+				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				isExperimental: true,
+				sync: {
+					serverKey: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN,
@@ -233,7 +274,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Render user messages using markdown formatting in the chat.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.RENDER_THINKING_AS_MARKDOWN,
@@ -241,7 +286,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Render the reasoning/thinking block content as formatted Markdown instead of plain text.',
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.RENDER_THINKING_AS_MARKDOWN,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS,
@@ -249,7 +298,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Always display code blocks at their full natural height, overriding any height limits.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
@@ -257,7 +310,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.ALWAYS_SHOW_SIDEBAR_ON_DESKTOP,
@@ -265,7 +322,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Always keep the sidebar visible on desktop instead of auto-hiding it.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.ALWAYS_SHOW_SIDEBAR_ON_DESKTOP,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
@@ -273,7 +334,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Display full raw model identifiers (e.g. "ggml-org/GLM-4.7-Flash-GGUF:Q8_0") instead of parsed names with badges.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_MODEL_QUANTIZATION,
@@ -281,7 +346,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Display quantization badges (e.g. Q8_0, Q4_K_M) next to model names throughout the interface.',
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_MODEL_QUANTIZATION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_MODEL_TAGS,
@@ -289,7 +358,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Display model tags (e.g. "vision", "reasoning") next to model names throughout the interface.',
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_MODEL_TAGS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_BUILD_VERSION,
@@ -297,7 +370,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Display the current build version in the bottom-right corner of the interface.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_BUILD_VERSION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			}
 		]
 	},
@@ -429,7 +506,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Enable backend-based samplers. When enabled, supported samplers run on the accelerator backend for faster sampling.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.SAMPLING
+				section: SETTINGS_SECTION_SLUGS.SAMPLING,
+				sync: {
+					serverKey: SETTINGS_KEYS.BACKEND_SAMPLING,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			}
 		]
 	},
@@ -545,7 +626,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: 10,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.AGENTIC,
-				isPositiveInteger: true
+				isPositiveInteger: true,
+				sync: {
+					serverKey: SETTINGS_KEYS.AGENTIC_MAX_TURNS,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
@@ -554,7 +639,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.AGENTIC,
-				isPositiveInteger: true
+				isPositiveInteger: true,
+				sync: {
+					serverKey: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
+					paramType: SyncableParameterType.NUMBER
+				}
 			}
 		]
 	},
@@ -569,7 +658,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'After each response, re-submit the conversation to pre-fill the server KV cache. Makes the next turn faster since the prompt is already encoded while you read the response.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.PRE_ENCODE_CONVERSATION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
@@ -577,7 +670,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Send reasoning_format=none so the server returns thinking tokens inline instead of extracting them into a separate field.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
@@ -585,7 +682,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Strip thinking from previous messages before sending. When off, thinking is sent back via the reasoning_content field so the model sees its own chain-of-thought across turns.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
@@ -593,7 +694,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
@@ -601,16 +706,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Expose a run_javascript tool to the model. Code runs in a Web Worker inside a sandboxed iframe with an opaque origin, isolated from the WebUI and its API, with a hard timeout.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
-			},
-			{
-				key: SETTINGS_KEYS.SYMBOLIC_MATH_ENABLED,
-				label: 'Symbolic math (nerdamer)',
-				help: 'Pre-load nerdamer in the sandbox for symbolic computation: simplify, diff, integrate, solve, and more. Requires "JavaScript sandbox tool" to be enabled.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
-				dependsOn: SETTINGS_KEYS.JS_SANDBOX_ENABLED
+				sync: {
+					serverKey: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.CUSTOM_JSON,
@@ -626,7 +726,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'CSS injected into the page at runtime. Set it here, or ship it server side via the --ui-config customCss field.',
 				defaultValue: '',
 				type: SettingsFieldType.TEXTAREA,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.CUSTOM_CSS,
+					paramType: SyncableParameterType.STRING
+				}
 			}
 		]
 	}
@@ -638,21 +742,19 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		label: 'Show system message',
 		help: 'Display the system message at the top of each conversation.',
 		defaultValue: true,
-		type: SettingsFieldType.CHECKBOX
+		type: SettingsFieldType.CHECKBOX,
+		sync: {
+			serverKey: SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE,
+			paramType: SyncableParameterType.BOOLEAN
+		}
 	},
 	{
 		key: SETTINGS_KEYS.MCP_SERVERS,
 		label: 'MCP servers',
 		help: 'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
 		defaultValue: '[]',
-		type: SettingsFieldType.INPUT
-	},
-	{
-		key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
-		label: 'Generate title with LLM',
-		help: 'Counterpart of the conversation title radio; stored and synced without a dedicated UI field.',
-		defaultValue: false,
-		type: SettingsFieldType.CHECKBOX
+		type: SettingsFieldType.INPUT,
+		sync: { serverKey: SETTINGS_KEYS.MCP_SERVERS, paramType: SyncableParameterType.STRING }
 	}
 	// {
 	// 	key: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,
@@ -661,7 +763,7 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 	// 	defaultValue: false,
 	// 	type: SettingsFieldType.CHECKBOX,
 	// 	isExperimental: true,
-	//
+	// 	sync: { serverKey: SETTINGS_KEYS.PY_INTERPRETER_ENABLED, paramType: SyncableParameterType.BOOLEAN }
 	// }
 ];
 
@@ -687,6 +789,9 @@ export const SETTING_CONFIG_INFO: Record<string, string> = Object.fromEntries(
 /** Theme select options. */
 export const SETTINGS_COLOR_MODES_CONFIG = COLOR_MODE_OPTIONS;
 
+export type { SettingsSectionTitle } from '$lib/types';
+export type { SettingsSection } from '$lib/types';
+
 /** Sidebar sections + field configs (as consumed by UI). */
 export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 	...Object.values(SETTINGS_REGISTRY).map((section) => ({
@@ -699,10 +804,8 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 			type: s.type,
 			isExperimental: s.isExperimental,
 			isPositiveInteger: s.isPositiveInteger,
-			dependsOn: s.dependsOn,
 			help: s.help,
-			options: s.options,
-			radioOptions: s.radioOptions
+			options: s.options
 		}))
 	})),
 	...STANDALONE_SECTIONS
@@ -729,3 +832,5 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = getAllSettings()
 	}));
 
 export const SETTINGS_FALLBACK_EXIT_ROUTE = ROUTES.START;
+
+export { SETTINGS_KEYS } from './settings-keys';

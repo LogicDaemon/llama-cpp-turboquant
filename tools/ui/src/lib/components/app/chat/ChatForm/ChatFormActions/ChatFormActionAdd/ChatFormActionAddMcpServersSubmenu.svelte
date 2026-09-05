@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Settings, Plus } from '@lucide/svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -61,7 +60,7 @@
 <DropdownMenu.Root>
 	<DropdownMenu.Sub onOpenChange={handleMcpSubMenuOpen}>
 		<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-			<McpLogo class={ICON_CLASS_DEFAULT} />
+			<McpLogo class="h-4 w-4" />
 
 			<span>MCP Servers</span>
 		</DropdownMenu.SubTrigger>
@@ -93,7 +92,7 @@
 										<McpServerIdentity
 											{displayName}
 											{faviconUrl}
-											iconClass={ICON_CLASS_DEFAULT}
+											iconClass="h-4 w-4"
 											iconRounded="rounded-sm"
 											showVersion={false}
 											nameClass="text-sm"
@@ -124,7 +123,7 @@
 							class="flex cursor-pointer items-center gap-2"
 							onclick={handleMcpSettingsClick}
 						>
-							<Settings class={ICON_CLASS_DEFAULT} />
+							<Settings class="h-4 w-4" />
 
 							<span>Manage MCP Servers</span>
 						</DropdownMenu.Item>
@@ -141,7 +140,7 @@
 					class="flex cursor-pointer items-center gap-2"
 					onclick={handleMcpSettingsClick}
 				>
-					<Plus class={ICON_CLASS_DEFAULT} />
+					<Plus class="h-4 w-4" />
 
 					<span>Add MCP Servers</span>
 				</DropdownMenu.Item>

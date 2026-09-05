@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Download } from '@lucide/svelte';
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
@@ -37,7 +36,7 @@
 			title="Zoom out"
 			aria-label="Zoom out"
 		>
-			<ZoomOutIcon class="mermaid-preview-btn-icon {ICON_CLASS_DEFAULT}" />
+			<ZoomOutIcon class="mermaid-preview-btn-icon h-4 w-4" />
 		</button>
 		<span
 			class="mermaid-preview-zoom-label min-w-[3.5rem] px-0.5 text-center text-xs font-medium text-muted-foreground tabular-nums select-none"
@@ -49,7 +48,7 @@
 			title="Zoom in"
 			aria-label="Zoom in"
 		>
-			<ZoomInIcon class="mermaid-preview-btn-icon {ICON_CLASS_DEFAULT}" />
+			<ZoomInIcon class="mermaid-preview-btn-icon h-4 w-4" />
 		</button>
 		<div class="mermaid-preview-controls-separator mx-1 h-5 w-px bg-border/50"></div>
 
@@ -59,7 +58,7 @@
 			title="Reset view"
 			aria-label="Reset view"
 		>
-			<RotateCcwIcon class="mermaid-preview-btn-icon {ICON_CLASS_DEFAULT}" />
+			<RotateCcwIcon class="mermaid-preview-btn-icon h-4 w-4" />
 		</button>
 		<div class="mermaid-preview-controls-separator mx-1 h-5 w-px bg-border/50"></div>
 
@@ -69,7 +68,7 @@
 			title="Download SVG"
 			aria-label="Download SVG"
 		>
-			<Download class="mermaid-preview-btn-icon {ICON_CLASS_DEFAULT}" />
+			<Download class="mermaid-preview-btn-icon h-4 w-4" />
 		</button>
 	</div>
 </div>

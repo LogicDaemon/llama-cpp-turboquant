@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import type { Component } from 'svelte';
 	import { Button, type ButtonVariant } from '$lib/components/ui/button';
 
@@ -37,7 +36,7 @@
 	<p class="mb-4 text-sm text-muted-foreground">{description}</p>
 
 	<Button class={sectionButtonClass} {onclick} variant={sectionButtonVariant}>
-		<IconComponent class="mr-2 {ICON_CLASS_DEFAULT}" />
+		<IconComponent class="mr-2 h-4 w-4" />
 
 		{buttonText}
 	</Button>

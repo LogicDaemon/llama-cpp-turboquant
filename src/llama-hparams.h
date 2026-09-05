@@ -47,7 +47,6 @@ struct llama_hparams {
     bool use_par_res;
     bool swin_norm;
     bool norm_before_residual = false;
-    bool norm_before_fc       = false;
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
@@ -80,6 +79,17 @@ struct llama_hparams {
 
     uint32_t n_shortconv_l_cache  = 0;
 
+    // explicit override for the rolling state size per layer (see n_embd_r())
+    uint32_t n_embd_r_impl = 0;
+
+    // inkling (private arch)
+    uint32_t inkling_d_rel          = 0;
+    uint32_t inkling_rel_extent     = 0; // global (non-SWA) layers
+    uint32_t inkling_rel_extent_swa = 0; // local (SWA) layers
+    uint32_t inkling_log_n_floor    = 0; // 0 = log-N scaling disabled
+    float    inkling_log_alpha      = 0.0f;
+    uint32_t inkling_unpadded_n_vocab = 0; // 0 = no padded-vocab masking
+
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
@@ -102,6 +112,9 @@ struct llama_hparams {
     uint32_t expert_gating_func   = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
     uint32_t moe_every_n_layers   = 0;
     uint32_t moe_latent_size      = 0;
+
+    // When true, only NextN/MTP tail layers allocate KV (see has_kv()).
+    bool kv_only_nextn = false;
 
     float f_norm_eps;
     float f_norm_rms_eps;
@@ -227,13 +240,6 @@ struct llama_hparams {
     uint32_t indexer_n_head    = 0;
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
-    // MSA
-    uint32_t indexer_block_size  = 0;
-    uint32_t indexer_local_blocks = 0;
-
-    // Indexer is "full" (1) or "shared" (0)
-    // Shared indexers reuse top-k from previous full layer
-    std::array<uint32_t, LLAMA_MAX_LAYERS> is_indexer_full_impl;
 
     // DeepSeek-V4
     uint32_t dsv4_o_group_count        = 0;
@@ -254,13 +260,18 @@ struct llama_hparams {
     // TODO: can be expressed via the `new n_embd_inp_impl` and remove this param
     uint32_t n_deepstack_layers = 0;
 
-    // deepstack layer array (Granite4 Vision)
-    // -1  => no deepstack
-    // >=0 => input embedding index for deepstack injection
+    // deepstack layer array (Granite4 Vision): -1 => none, >=0 => input embedding index
     std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_mapping_arr;
 
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
+
+    // gemma4 MTP assistant (speculative drafter)
+    uint32_t n_centroids              = 0;
+    uint32_t centroid_top_k           = 0;
+    uint32_t n_embd_backbone          = 0;
+    bool     attention_k_eq_v         = false;
+    bool     use_ordered_embeddings   = false;
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggml-org/llama.cpp/pull/8141
@@ -309,8 +320,6 @@ struct llama_hparams {
     bool is_swa_any() const;
 
     bool is_swa(uint32_t il) const;
-
-    bool is_indexer_full(uint32_t il) const;
 
     void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
 
@@ -373,6 +382,9 @@ struct llama_hparams {
 
     // number of effective layers (excludes nextn layers)
     uint32_t n_layer() const;
+
+    // number of layers that carry a KV cache (respects n_layer_kv_from_start)
+    uint32_t n_layer_kv() const;
 
     // note that this function uses different SWA parameters from those in the hparams
     // note: inlined on purpose for performance reasons

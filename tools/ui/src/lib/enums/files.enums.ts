@@ -180,7 +180,6 @@ export enum UriPattern {
 
 // MIME type enums
 export enum MimeTypeApplication {
-	JSON = 'application/json',
 	PDF = 'application/pdf',
 	OCTET_STREAM = 'application/octet-stream',
 	ZIP = 'application/zip'

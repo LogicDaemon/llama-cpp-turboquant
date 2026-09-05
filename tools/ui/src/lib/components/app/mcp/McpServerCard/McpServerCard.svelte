@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { tick } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -70,12 +69,7 @@
 	async function startEditing() {
 		isEditing = true;
 		await tick();
-		editFormRef?.setInitialValues(
-			server.url,
-			server.headers || '',
-			server.useProxy || false,
-			displayName
-		);
+		editFormRef?.setInitialValues(server.url, server.headers || '', server.useProxy || false);
 	}
 
 	function cancelEditing() {
@@ -86,12 +80,9 @@
 		}
 	}
 
-	function saveEditing(url: string, headers: string, useProxy: boolean, name?: string) {
+	function saveEditing(url: string, headers: string, useProxy: boolean) {
 		onUpdate({
 			url: url,
-			// undefined = prefill untouched, keep any existing custom name;
-			// empty string = field cleared, back to the automatic label
-			displayName: name === undefined ? server.displayName : name.trim() || undefined,
 			headers: headers || undefined,
 			useProxy: useProxy
 		});
@@ -114,7 +105,6 @@
 			serverId={server.id}
 			serverUrl={server.url}
 			serverUseProxy={server.useProxy}
-			serverLabel={displayName}
 			onSave={saveEditing}
 			onCancel={cancelEditing}
 		/>
@@ -144,7 +134,7 @@
 			{#if showSkeleton}
 				<div class="space-y-2">
 					<div class="flex items-center gap-2">
-						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
+						<Skeleton class="h-4 w-4 rounded" />
 						<Skeleton class="h-3 w-24" />
 					</div>
 					<div class="flex flex-wrap gap-1.5">
@@ -156,7 +146,7 @@
 
 				<div class="space-y-1.5">
 					<div class="flex items-center gap-2">
-						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
+						<Skeleton class="h-4 w-4 rounded" />
 						<Skeleton class="h-3 w-32" />
 					</div>
 				</div>

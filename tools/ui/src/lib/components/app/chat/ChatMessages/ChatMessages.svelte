@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import { beforeNavigate, afterNavigate } from '$app/navigation';
 	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
@@ -33,6 +35,9 @@
 	let { messages = [], onUserAction, onMessagesReady }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
+	let isVisible = $state(false);
+	let previousConversationId = $state<string | null>(null);
+	let previousRouteId = $state<string | null>(null);
 
 	const currentConfig = config();
 
@@ -118,10 +123,26 @@
 		}
 	}
 
-	// Refresh messages whenever the active conversation changes
+	// Track conversation changes to trigger transition even on same route
 	$effect(() => {
-		if (activeConversation()) {
-			refreshAllMessages();
+		const conversation = activeConversation();
+		const currentId = conversation?.id ?? null;
+
+		if (currentId !== previousConversationId && previousConversationId !== null) {
+			// Conversation changed - trigger fade out/in
+			isVisible = false;
+			requestAnimationFrame(() => {
+				refreshAllMessages();
+				previousConversationId = currentId;
+				requestAnimationFrame(() => {
+					isVisible = true;
+				});
+			});
+		} else {
+			previousConversationId = currentId;
+			if (conversation) {
+				refreshAllMessages();
+			}
 		}
 	});
 
@@ -129,6 +150,23 @@
 		void allConversationMessages;
 
 		onMessagesReady?.(displayMessages.length);
+	});
+
+	onMount(() => {
+		requestAnimationFrame(() => {
+			isVisible = true;
+		});
+	});
+
+	beforeNavigate((navigation) => {
+		isVisible = false;
+		previousRouteId = navigation.from?.route.id ?? null;
+	});
+
+	afterNavigate(() => {
+		requestAnimationFrame(() => {
+			isVisible = true;
+		});
 	});
 
 	let siblingInfoByMessageId = $derived(buildSiblingInfoMap(allConversationMessages));
@@ -234,7 +272,11 @@
 	});
 </script>
 
-<div>
+<div
+	class="transition-opacity duration-500 ease-out
+		{isVisible ? 'opacity-100' : 'opacity-0'}
+		{previousRouteId === '/(chat)/chat/[id]' ? '' : 'delay-300'}"
+>
 	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, isLastUserMessage, nextAssistantMessage, siblingInfo } (message.id)}
 		<ChatMessage
 			class="mx-auto mt-12 w-full max-w-3xl"

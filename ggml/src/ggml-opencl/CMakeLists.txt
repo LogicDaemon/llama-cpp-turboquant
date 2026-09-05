@@ -5,8 +5,6 @@ set(TARGET_NAME ggml-opencl)
 
 ggml_add_backend_library(${TARGET_NAME}
                          ggml-opencl.cpp
-                         cl-program-cache.cpp
-                         cl-program-cache.h
                          ../../include/ggml-opencl.h)
 target_link_libraries(${TARGET_NAME} PRIVATE ${OpenCL_LIBRARIES})
 target_include_directories(${TARGET_NAME} PRIVATE ${OpenCL_INCLUDE_DIRS})
@@ -213,7 +211,6 @@ set(GGML_OPENCL_KERNELS
     tanh
     exp
     expm1
-    abs
     softplus
     pad
     repeat

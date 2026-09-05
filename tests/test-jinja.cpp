@@ -4,7 +4,7 @@
 #include <cstdlib>
 
 #include <nlohmann/json.hpp>
-#include "subproc.h"
+#include <sheredom/subprocess.h>
 
 #include "jinja/runtime.h"
 #include "jinja/parser.h"
@@ -2135,20 +2135,21 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         const char * python_executable = "python3";
 #endif
 
-        std::vector<std::string> args = {python_executable, "-c", py_script, };
+        const char * command_line[] = {python_executable, "-c", py_script.c_str(), NULL};
 
-        common_subproc subprocess;
+        struct subprocess_s subprocess;
         int options = subprocess_option_combined_stdout_stderr
                     | subprocess_option_no_window
                     | subprocess_option_inherit_environment
                     | subprocess_option_search_user_path;
+        int result = subprocess_create(command_line, options, &subprocess);
 
-        if (!subprocess.create(args, options)) {
-            t.log("Failed to create subprocess");
+        if (result != 0) {
+            t.log("Failed to create subprocess, error code: " + std::to_string(result));
             t.assert_true("subprocess creation", false);
             return;
         }
-        FILE * p_stdin = subprocess.stdin_file();
+        FILE * p_stdin = subprocess_stdin(&subprocess);
 
         // Write input
         std::string input = merged.dump();
@@ -2156,22 +2157,24 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         if (written != input.size()) {
             t.log("Failed to write complete input to subprocess stdin");
             t.assert_true("subprocess stdin write", false);
-            subprocess.close_stdin();
-            subprocess.join();
+            subprocess_destroy(&subprocess);
             return;
         }
         fflush(p_stdin);
-        subprocess.close_stdin(); // Close stdin to signal EOF to the Python process
+        fclose(p_stdin); // Close stdin to signal EOF to the Python process
+        subprocess.stdin_file = nullptr;
 
         // Read output
         std::string output;
         char buffer[1024];
-        FILE * p_stdout = subprocess.stdout_file();
+        FILE * p_stdout = subprocess_stdout(&subprocess);
         while (fgets(buffer, sizeof(buffer), p_stdout)) {
             output += buffer;
         }
 
-        int process_return = subprocess.join();
+        int process_return;
+        subprocess_join(&subprocess, &process_return);
+        subprocess_destroy(&subprocess);
 
         if (process_return != 0) {
             t.log("Python script failed with exit code: " + std::to_string(process_return));

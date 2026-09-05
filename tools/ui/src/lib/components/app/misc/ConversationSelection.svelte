@@ -4,7 +4,6 @@
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 
 	interface Props {
 		conversations: DatabaseConversation[];
@@ -12,20 +11,13 @@
 		mode: 'export' | 'import';
 		onCancel: () => void;
 		onConfirm: (selectedConversations: DatabaseConversation[]) => void;
-		isOpen?: boolean;
 	}
 
-	let {
-		conversations,
-		messageCountMap = new Map(),
-		mode,
-		onCancel,
-		onConfirm,
-		isOpen = true
-	}: Props = $props();
+	let { conversations, messageCountMap = new Map(), mode, onCancel, onConfirm }: Props = $props();
 
 	let searchQuery = $state('');
 	let selectedIds = $state.raw<SvelteSet<string>>(getInitialSelectedIds());
+	let lastClickedId = $state<string | null>(null);
 
 	function getInitialSelectedIds(): SvelteSet<string> {
 		return new SvelteSet(conversations.map((c) => c.id));
@@ -38,8 +30,6 @@
 		})
 	);
 
-	let orderedIds = $derived(filteredConversations.map((c) => c.id));
-
 	let allSelected = $derived(
 		filteredConversations.length > 0 &&
 			filteredConversations.every((conv) => selectedIds.has(conv.id))
@@ -49,20 +39,54 @@
 		filteredConversations.some((conv) => selectedIds.has(conv.id)) && !allSelected
 	);
 
-	const marquee = useMarqueeSelection({
-		selectedIds: () => selectedIds,
-		orderedIds: () => orderedIds,
-		enabled: () => isOpen
-	});
+	function toggleConversation(id: string, shiftKey: boolean = false) {
+		const newSet = new SvelteSet(selectedIds);
+
+		if (shiftKey && lastClickedId !== null) {
+			const lastIndex = filteredConversations.findIndex((c) => c.id === lastClickedId);
+			const currentIndex = filteredConversations.findIndex((c) => c.id === id);
+
+			if (lastIndex !== -1 && currentIndex !== -1) {
+				const start = Math.min(lastIndex, currentIndex);
+				const end = Math.max(lastIndex, currentIndex);
+
+				const shouldSelect = !newSet.has(id);
+
+				for (let i = start; i <= end; i++) {
+					if (shouldSelect) {
+						newSet.add(filteredConversations[i].id);
+					} else {
+						newSet.delete(filteredConversations[i].id);
+					}
+				}
+
+				selectedIds = newSet;
+				return;
+			}
+		}
+
+		if (newSet.has(id)) {
+			newSet.delete(id);
+		} else {
+			newSet.add(id);
+		}
+
+		selectedIds = newSet;
+		lastClickedId = id;
+	}
 
 	function toggleAll() {
-		const newSet = new SvelteSet(selectedIds);
 		if (allSelected) {
+			const newSet = new SvelteSet(selectedIds);
+
 			filteredConversations.forEach((conv) => newSet.delete(conv.id));
+			selectedIds = newSet;
 		} else {
+			const newSet = new SvelteSet(selectedIds);
+
 			filteredConversations.forEach((conv) => newSet.add(conv.id));
+			selectedIds = newSet;
 		}
-		selectedIds = newSet;
 	}
 
 	function handleConfirm() {
@@ -73,7 +97,7 @@
 	function handleCancel() {
 		selectedIds = getInitialSelectedIds();
 		searchQuery = '';
-		marquee.reset();
+		lastClickedId = null;
 
 		onCancel();
 	}
@@ -81,7 +105,7 @@
 	export function reset() {
 		selectedIds = getInitialSelectedIds();
 		searchQuery = '';
-		marquee.reset();
+		lastClickedId = null;
 	}
 </script>
 
@@ -98,7 +122,7 @@
 	</div>
 
 	<div class="overflow-hidden rounded-md border">
-		<ScrollArea class="h-100">
+		<ScrollArea class="h-[400px]">
 			<table class="w-full">
 				<thead class="sticky top-0 z-10 bg-muted">
 					<tr class="border-b">
@@ -115,7 +139,6 @@
 						<th class="w-32 p-3 text-left text-sm font-medium">Messages</th>
 					</tr>
 				</thead>
-
 				<tbody>
 					{#if filteredConversations.length === 0}
 						<tr>
@@ -129,28 +152,23 @@
 						</tr>
 					{:else}
 						{#each filteredConversations as conv (conv.id)}
-							{@const checked = selectedIds.has(conv.id)}
 							<tr
-								class="cursor-pointer border-b transition-colors hover:bg-muted/50 {checked
-									? 'bg-muted/75'
-									: ''}"
-								data-conversation-row={conv.id}
-								onmousedown={(event) => marquee.rowMouseDown(conv.id, event)}
-								onclick={(event) => marquee.rowClick(conv.id, event.shiftKey)}
+								class="cursor-pointer border-b transition-colors hover:bg-muted/50"
+								onclick={(event) => toggleConversation(conv.id, event.shiftKey)}
 							>
 								<td class="p-3">
 									<Checkbox
-										{checked}
+										checked={selectedIds.has(conv.id)}
 										onclick={(event) => {
 											event.preventDefault();
 											event.stopPropagation();
-											marquee.rowClick(conv.id, event.shiftKey);
+											toggleConversation(conv.id, event.shiftKey);
 										}}
 									/>
 								</td>
 
 								<td class="p-3 text-sm">
-									<div class="max-w-68 truncate" title={conv.name || 'Untitled conversation'}>
+									<div class="max-w-[17rem] truncate" title={conv.name || 'Untitled conversation'}>
 										{conv.name || 'Untitled conversation'}
 									</div>
 								</td>

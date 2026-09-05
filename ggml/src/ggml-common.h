@@ -383,6 +383,12 @@ static_assert(sizeof(block_tq4_1s) == 20, "wrong tq4_1s block size");
 //
 
 // 2-bit quantization
+
+//
+// Super-block quantization structures
+//
+
+// 2-bit quantization
 // weight is represented as x = a * q + b
 // 16 blocks of 16 elements each
 // Effectively 2.625 bits per weight

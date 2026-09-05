@@ -108,7 +108,7 @@ jobs:
           find build/bin -name "*.so*" -exec cp -P {} release/build/bin/ \; 2>/dev/null || true
           cp LICENSE release/build/bin/ 2>/dev/null || true
           cd release
-          zip -r ../llama-turboquant-linux-x64-vulkan.zip .
+          zip -ry ../llama-turboquant-linux-x64-vulkan.zip .
           tar -czf ../llama-turboquant-linux-x64-vulkan.tar.gz .
 
       - name: Upload archive
@@ -147,9 +147,10 @@ jobs:
 
       - name: Build
         # Consumer SASS: RTX 30 (86), RTX 40 (89), RTX 50 / Blackwell (120).
-        # PTX floor at Turing (75-virtual) so Turing/older consumer and all
-        # server cards (A100 80, H100/H200 90, B200 100) JIT at first run --
-        # we don't ship their SASS, which is what bloated the archive. Runner
+        # Two PTX floors: 75-virtual for Turing, 80-virtual so the server cards
+        # (A100 80, H100 90, B200 100) JIT Ampere-class code instead of Turing
+        # code -- cp.async and the Ampere MMA path are gated on __CUDA_ARCH__
+        # >= 800, so a compute_75 PTX fallback quietly cost them both. Runner
         # has no GPU: build only, backend is a dlopen'd libggml-cuda.so.
         run: |
           cmake -B build \
@@ -161,7 +162,8 @@ jobs:
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_CUDA=ON \
             -DGGML_CUDA_CUB_3DOT2=ON \
-            -DCMAKE_CUDA_ARCHITECTURES="75-virtual;86-real;89-real;120-real" \
+            -DCMAKE_CUDA_ARCHITECTURES="75-virtual;80-virtual;86-real;89-real;120-real" \
+            -DCMAKE_CUDA_FLAGS=-compress-mode=size \
             -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache \
             -DLLAMA_CURL=OFF \
             -DLLAMA_OPENSSL=OFF \
@@ -192,7 +194,7 @@ jobs:
           cp -P /usr/local/cuda/lib64/libcublasLt.so* release/build/bin/
           cp LICENSE release/build/bin/ 2>/dev/null || true
           cd release
-          zip -r ../llama-turboquant-linux-x64-cuda-13.3.zip .
+          zip -ry ../llama-turboquant-linux-x64-cuda-13.3.zip .
           tar -czf ../llama-turboquant-linux-x64-cuda-13.3.tar.gz .
 
       - name: Upload archive
@@ -202,6 +204,113 @@ jobs:
           path: |
             llama-turboquant-linux-x64-cuda-13.3.zip
             llama-turboquant-linux-x64-cuda-13.3.tar.gz
+          retention-days: 14
+
+  # NVIDIA DGX Spark (GB10) and other arm64 + NVIDIA Linux boxes. Built on
+  # the free GitHub arm64 runner -- no cross-compilation involved.
+  linux-arm64-cuda-13-3:
+    name: linux-arm64-cuda-13.3
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: turboquant-linux-arm64-cuda-13.3
+          evict-old-files: 1d
+
+      # GCC 14: GGML_CPU_ALL_VARIANTS builds armv9.2+sme CPU variants, which
+      # the 24.04 default GCC 13 cannot assemble. Same workaround as the
+      # upstream arm64 job in build-cpu.yml.
+      - name: Toolchain
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential gcc-14 g++-14
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
+
+      - name: Install CUDA Toolkit
+        # arm64-SBSA repo -- the one NVIDIA ships for DGX Spark / GH200-class
+        # machines. The `arm64` repo of the same distro is Jetson/L4T and has
+        # no CUDA 13 packages; `cccl` lost its `cuda-` prefix in 13.3.
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            cuda-nvcc-13-3 cccl-13-3 cuda-cudart-dev-13-3 libcublas-dev-13-3 \
+            cuda-cuobjdump-13-3
+          echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        # SASS for GB10 / DGX Spark only (sm_121). PTX floor at Hopper
+        # (90-virtual) so the other arm64 CUDA machines -- GH200 (90),
+        # GB200 (100), Jetson Thor (110) -- JIT at first run instead of
+        # doubling build time on a 4-core runner. Runner has no GPU: build
+        # only, the backend is a dlopen'd libggml-cuda.so.
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_CUDA=ON \
+            -DGGML_CUDA_CUB_3DOT2=ON \
+            -DCMAKE_CUDA_ARCHITECTURES="90-virtual;121-real" \
+            -DCMAKE_CUDA_FLAGS=-compress-mode=size \
+            -DCMAKE_CUDA_HOST_COMPILER=g++-14 \
+            -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=OFF \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Verify build
+        run: |
+          ./build/bin/llama-server --version 2>&1 || true
+          ls -l build/bin/libggml-cuda.so
+          # Catch a silently-empty arch list: the archive is worthless without
+          # sm_121 SASS in it.
+          cuobjdump --list-elf build/bin/libggml-cuda.so | grep -q 'sm_121'
+
+      - name: Prepare archive
+        run: |
+          mkdir -p release/build/bin
+          cp build/bin/llama-server release/build/bin/
+          cp build/bin/llama-cli release/build/bin/ 2>/dev/null || true
+          cp build/bin/llama-bench release/build/bin/ 2>/dev/null || true
+          cp build/bin/llama-perplexity release/build/bin/ 2>/dev/null || true
+          cp build/bin/llama-quantize release/build/bin/ 2>/dev/null || true
+          find build/bin -name "*.so*" -exec cp -P {} release/build/bin/ \; 2>/dev/null || true
+          # CUDA runtime is not a given on user systems -- bundle it like the
+          # x64 job does. On aarch64 the libs live under targets/sbsa-linux.
+          CUDA_LIB=/usr/local/cuda/lib64
+          [ -d "$CUDA_LIB" ] || CUDA_LIB=/usr/local/cuda/targets/sbsa-linux/lib
+          cp -P "$CUDA_LIB"/libcudart.so* release/build/bin/
+          cp -P "$CUDA_LIB"/libcublas.so* release/build/bin/
+          cp -P "$CUDA_LIB"/libcublasLt.so* release/build/bin/
+          cp LICENSE release/build/bin/ 2>/dev/null || true
+          cd release
+          zip -ry ../llama-turboquant-linux-arm64-cuda-13.3.zip .
+          tar -czf ../llama-turboquant-linux-arm64-cuda-13.3.tar.gz .
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-linux-arm64-cuda-13.3
+          path: |
+            llama-turboquant-linux-arm64-cuda-13.3.zip
+            llama-turboquant-linux-arm64-cuda-13.3.tar.gz
           retention-days: 14
 
   linux-x64-cpu:
@@ -259,7 +368,7 @@ jobs:
           find build/bin -name "*.so*" -exec cp -P {} release/build/bin/ \; 2>/dev/null || true
           cp LICENSE release/build/bin/ 2>/dev/null || true
           cd release
-          zip -r ../llama-turboquant-linux-x64-cpu.zip .
+          zip -ry ../llama-turboquant-linux-x64-cpu.zip .
           tar -czf ../llama-turboquant-linux-x64-cpu.tar.gz .
 
       - name: Upload archive
@@ -341,7 +450,7 @@ jobs:
           cp -P /usr/local/cuda/lib64/libcublasLt.so* release/build/bin/
           cp LICENSE release/build/bin/ 2>/dev/null || true
           cd release
-          zip -r ../llama-turboquant-linux-x64-cuda-12.4.zip .
+          zip -ry ../llama-turboquant-linux-x64-cuda-12.4.zip .
           tar -czf ../llama-turboquant-linux-x64-cuda-12.4.tar.gz .
 
       - name: Upload archive
@@ -393,9 +502,15 @@ jobs:
           sudo apt-get install -y build-essential cmake libssl-dev rocm-hip-sdk
 
       - name: Build
-        # RDNA only, by scope decision: gfx1030 (RDNA2), gfx1100/1101/1102
-        # (RDNA3), gfx1151 (RDNA 3.5 / Strix Halo), gfx1200/1201 (RDNA4).
-        # GCN/CDNA are intentionally excluded -- those users use Vulkan.
+        # RDNA2-RDNA4: gfx1030, gfx1100/1101/1102, gfx1151 (Strix Halo),
+        # gfx1200/1201. CDNA: gfx90a, gfx942 (MI200/MI300).
+        #
+        # Both families ship in one archive. --offload-compress makes that
+        # affordable: measured on gfx942, libggml-hip.so is 439 MiB for RDNA
+        # alone without it, 48 MiB for RDNA with it, and 65 MiB for RDNA+CDNA
+        # with it. Without the flag the combined build is ~2 GB, which is why
+        # CDNA used to be excluded.
+        #
         # Runner has no AMD GPU: build only. libggml-hip.so is dlopen'd
         # thanks to GGML_BACKEND_DL.
         run: |
@@ -411,7 +526,8 @@ jobs:
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_HIP=ON \
             -DHIP_PLATFORM=amd \
-            -DGPU_TARGETS="gfx1030;gfx1100;gfx1101;gfx1102;gfx1151;gfx1200;gfx1201" \
+            -DGPU_TARGETS="gfx1030;gfx1100;gfx1101;gfx1102;gfx1151;gfx1200;gfx1201;gfx90a;gfx942" \
+            -DCMAKE_HIP_FLAGS="--offload-compress" \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DLLAMA_CURL=OFF \
             -DLLAMA_OPENSSL=OFF \
@@ -443,11 +559,12 @@ jobs:
           cp LICENSE release/build/bin/ 2>/dev/null || true
           cat > release/build/bin/README-ROCm.txt << 'EOF'
           This build needs the AMD ROCm runtime installed on the system
-          (https://rocm.docs.amd.com). Targets AMD RDNA2-RDNA4:
-          gfx1030/1100/1101/1102/1151/1200/1201. GCN GPUs: use the Vulkan build.
+          (https://rocm.docs.amd.com). Targets AMD RDNA2-RDNA4
+          (gfx1030/1100/1101/1102/1151/1200/1201) and CDNA (gfx90a, gfx942 --
+          MI200/MI300). Older GCN GPUs: use the Vulkan build.
           EOF
           cd release
-          zip -r ../llama-turboquant-linux-x64-rocm.zip .
+          zip -ry ../llama-turboquant-linux-x64-rocm.zip .
           tar -czf ../llama-turboquant-linux-x64-rocm.tar.gz .
 
       - name: Upload archive
@@ -470,6 +587,7 @@ jobs:
             cmake_flags: ''
           - variant: vulkan
             cmake_flags: '-DGGML_VULKAN=ON'
+          # Do not add flags here -- see the CUDA_EXTRA note in the Build step.
           - variant: cuda-12.4
             cuda: '12.4'
             cmake_flags: '-DGGML_CUDA=ON -DGGML_CUDA_CUB_3DOT2=ON'
@@ -487,7 +605,10 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: turboquant-windows-x64-${{ matrix.variant }}
-          evict-old-files: 1d
+          # 500M (the action default) cannot hold a CUDA build, so the cache
+          # thrashed and every run was effectively cold.
+          max-size: ${{ startsWith(matrix.variant, 'cuda') && '2G' || '500M' }}
+          evict-old-files: 7d
 
       - name: Install CUDA Toolkit
         if: ${{ startsWith(matrix.variant, 'cuda') }}
@@ -507,11 +628,35 @@ jobs:
       - name: Install Ninja
         run: choco install ninja -y
 
+      # Defender scans every object nvcc writes, and the CUDA variants write
+      # tens of thousands of them. Best-effort: never fail the build over it.
+      - name: Exclude build tree from Defender
+        shell: pwsh
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath "${{ github.workspace }}", "$env:RUNNER_TEMP"
+            Add-MpPreference -ExclusionProcess "nvcc.exe", "cl.exe", "ninja.exe", "cicc.exe", "ptxas.exe", "cudafe++.exe"
+          } catch {
+            Write-Host "Defender exclusions unavailable: $_"
+          }
+
       - name: Build
         shell: cmd
+        # CUDA_EXTRA carries the pinned arch lists (the ggml default builds 8
+        # targets on 12.4 and 7 on 13.3, including DGX Spark SASS on Windows)
+        # and -compress-mode=size, which needs CTK >= 12.8 so 12.4 cannot have
+        # it. These live here rather than in the matrix because a matrix value
+        # becomes part of the job's display name, and those names are master's
+        # required status checks -- renaming one leaves the required check
+        # permanently "Expected" and the PR unmergeable.
+        # Nothing that runs today loses support: only 90-virtual on 12.4
+        # (Hopper still JITs from 80-virtual) and 121a-real on 13.3 are dropped.
         # NOTE: GGML_CUDA_CUB_3DOT2 can be dropped once CCCL 3.2 ships in the CTK used here.
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          set CUDA_EXTRA=
+          if "${{ matrix.variant }}"=="cuda-12.4" set CUDA_EXTRA=-DCMAKE_CUDA_ARCHITECTURES="50-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real"
+          if "${{ matrix.variant }}"=="cuda-13.3" set CUDA_EXTRA=-DCMAKE_CUDA_ARCHITECTURES="75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real" -DCMAKE_CUDA_FLAGS=-compress-mode=size
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
@@ -523,8 +668,8 @@ jobs:
             -DLLAMA_BUILD_TOOLS=ON ^
             -DLLAMA_BUILD_TESTS=OFF ^
             -DLLAMA_BUILD_EXAMPLES=OFF ^
-            ${{ matrix.cmake_flags }}
-          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+            ${{ matrix.cmake_flags }} %CUDA_EXTRA%
+          set NINJA_JOBS=%NUMBER_OF_PROCESSORS%
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release -j %NINJA_JOBS%
 
@@ -564,7 +709,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path release\build\bin | Out-Null
           Copy-Item .\build\bin\Release\* release\build\bin\ -Recurse -Force
           Copy-Item .\LICENSE release\build\bin\ -ErrorAction SilentlyContinue
-          Compress-Archive -Path release\build -DestinationPath llama-turboquant-windows-x64-${{ matrix.variant }}.zip -Force
+          $zip = "llama-turboquant-windows-x64-${{ matrix.variant }}.zip"
+          # Compress-Archive is single-threaded and needs double-digit minutes
+          # on the CUDA archives. 7-Zip ships with the runner image.
+          if (Get-Command 7z -ErrorAction SilentlyContinue) {
+            Push-Location release
+            7z a -tzip -mx=5 -mmt=on "..\$zip" build | Out-Null
+            Pop-Location
+          } else {
+            Compress-Archive -Path release\build -DestinationPath $zip -Force
+          }
 
       - name: Upload archive
         uses: actions/upload-artifact@v4
@@ -689,7 +843,7 @@ jobs:
   # broken backend never blocks the others from shipping to testers — the
   # release notes call out what is missing.
   publish-dev-latest:
-    needs: [linux-x64-cpu, linux-x64-vulkan, linux-x64-cuda-12-4, linux-x64-cuda-13-3, linux-x64-rocm, windows-x64, macos-arm64]
+    needs: [linux-x64-cpu, linux-x64-vulkan, linux-x64-cuda-12-4, linux-x64-cuda-13-3, linux-arm64-cuda-13-3, linux-x64-rocm, windows-x64, macos-arm64]
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
     runs-on: ubuntu-22.04
     permissions:
@@ -716,7 +870,7 @@ jobs:
           DATE=$(date -u +%Y-%m-%d)
           ls -lh archives/
 
-          EXPECTED="linux-x64-cpu linux-x64-vulkan linux-x64-cuda-12.4 linux-x64-cuda-13.3 linux-x64-rocm windows-x64-cpu windows-x64-vulkan windows-x64-cuda-12.4 windows-x64-cuda-13.3 macos-arm64"
+          EXPECTED="linux-x64-cpu linux-x64-vulkan linux-x64-cuda-12.4 linux-x64-cuda-13.3 linux-arm64-cuda-13.3 linux-x64-rocm windows-x64-cpu windows-x64-vulkan windows-x64-cuda-12.4 windows-x64-cuda-13.3 macos-arm64"
           MISSING=""
           for b in $EXPECTED; do
             ls archives/ | grep -q "llama-turboquant-${b}\." || MISSING="$MISSING $b"

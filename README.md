@@ -1,3 +1,9 @@
+<!-- https://github.com/LogicDaemon/llama-cpp-turboquant prefix -->
+This is [thecodacus/llama.cpp@fable5/cpu-tensor-parallel](https://github.com/thecodacus/llama.cpp/tree/fable5/cpu-tensor-parallel) rebased on top of [thecodacus/llama.cpp@fable5/prefetch-experts](https://github.com/thecodacus/llama.cpp/tree/fable5/prefetch-experts) rebased on top of [TheTom/llama-cpp-turboquant@tqp-v0.1.1](https://github.com/TheTom/llama-cpp-turboquant/releases/tag/tqp-v0.1.1).
+
+README below is merged.
+<!-- end of https://github.com/LogicDaemon/llama-cpp-turboquant prefix -->
+
 # llama.cpp
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)

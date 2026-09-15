@@ -105,6 +105,21 @@ Measured on an RTX 3060 12GB (`-ngl 99 -ncmoe 99 -fa 1`):
 Supported architectures: `qwen35moe`, `deepseek2`, `laguna` (plain fused-SILU gated expert FFN,
 separate gate/up/down tensors). Other architectures run unchanged.
 
+Check the startup `arch` value, not the model's marketing name. In particular, `qwen3next`
+is not wired to use the hot packs in this fork; allocating a pack alone does not establish
+that the model's graph uses it. GGUFs with fused gate/up expert tensors are also ineligible.
+
+### What the knobs control
+
+- `--cpu-moe` keeps all routed expert weights on the host; `--n-cpu-moe N` does so only for
+  the first N layers. Lowering N lets subsequent layers' experts reside fully on GPU when
+  those layers are GPU-offloaded. `--cpu-moe` overrides `--n-cpu-moe`.
+- `--moe-cache-slots S` allocates space for up to S experts **per eligible host-resident layer**.
+  Both a positive slot count and `--moe-cache-profile` are required; slots alone do nothing.
+- The profile ranks experts by decode routing frequency. Their gate/up/down weights are
+  copied to VRAM once at load time; the selection stays fixed until reload. This is not a
+  demand-filled or LRU SSD cache, and the original host weights remain mapped/allocated.
+
 ### Quick start
 
 **1. Capture a routing profile** (one time per model — records which experts the router picks):
@@ -178,10 +193,12 @@ A warning instead of this line means the cache fell back to baseline (see Tuning
 
 | Symptom | Cause |
 | --- | --- |
+| Slots change neither VRAM nor logs | No profile supplied, or slot count is non-positive — initialization silently returns. |
 | `cannot open profile '...'` | Path not visible to the process (e.g. not mounted into the container). |
 | `pack allocation failed` | Slot count too big — read the fit math in the warning and reduce. |
 | `no CPU-resident MoE layers` | Experts are already on GPU (no `--n-cpu-moe`) — nothing to cache. |
 | No init line, no warning | Architecture not wired for the cache — model runs unchanged. |
+| Pack allocated but no cache benefit | Check graph support, separate gate/up tensors, and profile coverage; allocation alone is not proof of use. |
 | Model loads, then context creation OOMs | Pack fits but KV/compute don't — drop a few slots or shrink/compress KV. |
 
 ## Recent API changes

@@ -188,13 +188,13 @@ static int ggml_cuda_highest_compiled_arch(const int arch) {
 #define GGML_CUDA_MAX_STREAMS 8
 
 [[noreturn]]
-void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg);
+void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, int error_code, const char * msg);
 
 #define CUDA_CHECK_GEN(err, success, error_fn)                                      \
      do {                                                                           \
         auto err_ = (err);                                                          \
         if (err_ != (success)) {                                                    \
-            ggml_cuda_error(#err, __func__, __FILE__, __LINE__, error_fn(err_));    \
+            ggml_cuda_error(#err, __func__, __FILE__, __LINE__, (int) err_, error_fn(err_)); \
         }                                                                           \
     } while (0)
 

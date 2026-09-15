@@ -99,13 +99,40 @@ static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
     { static std::once_flag warn_flag; std::call_once(warn_flag, []() { GGML_LOG_WARN(str); }); }
 
 [[noreturn]]
-void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg) {
+void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, int error_code, const char * msg) {
     int id = -1; // in case cudaGetDevice fails
     (void)cudaGetDevice(&id);
 
-    GGML_LOG_ERROR(GGML_CUDA_NAME " error: %s\n", msg);
-    GGML_LOG_ERROR("  current device: %d, in function %s at %s:%d\n", id, func, file, line);
-    GGML_LOG_ERROR("  %s\n", stmt);
+    size_t free_bytes  = 0;
+    size_t total_bytes = 0;
+    const cudaError_t mem_info_status = cudaMemGetInfo(&free_bytes, &total_bytes);
+
+    // Write directly to stderr and flush before aborting. On Windows, queued logger
+    // messages can be lost when GGML_ABORT terminates the process, leaving only the
+    // unhelpful final "CUDA error" line.
+    fprintf(stderr,
+            "\n" GGML_CUDA_NAME " failure:\n"
+            "  status:    %d (%s)\n"
+            "  statement: %s\n"
+            "  function:  %s\n"
+            "  location:  %s:%d\n"
+            "  device:    %d\n",
+            error_code, msg ? msg : "unknown error", stmt, func, file, line, id);
+    if (mem_info_status == cudaSuccess) {
+        fprintf(stderr, "  VRAM:      %.2f MiB free / %.2f MiB total\n",
+                free_bytes / 1024.0 / 1024.0, total_bytes / 1024.0 / 1024.0);
+    } else {
+        fprintf(stderr, "  VRAM:      unavailable (%d: %s)\n",
+                (int) mem_info_status, cudaGetErrorString(mem_info_status));
+    }
+    fprintf(stderr,
+            "  env:       CUDA_LAUNCH_BLOCKING=%s, GGML_CUDA_DISABLE_GRAPHS=%s, "
+            "GGML_CUDA_REGISTER_HOST=%s, GGML_SCHED_PREFETCH_EXPERTS=%s\n",
+            getenv("CUDA_LAUNCH_BLOCKING")         ? getenv("CUDA_LAUNCH_BLOCKING")         : "<unset>",
+            getenv("GGML_CUDA_DISABLE_GRAPHS")     ? getenv("GGML_CUDA_DISABLE_GRAPHS")     : "<unset>",
+            getenv("GGML_CUDA_REGISTER_HOST")      ? getenv("GGML_CUDA_REGISTER_HOST")      : "<unset>",
+            getenv("GGML_SCHED_PREFETCH_EXPERTS")  ? getenv("GGML_SCHED_PREFETCH_EXPERTS")  : "<unset>");
+    fflush(stderr);
     // abort with GGML_ABORT to get a stack trace
     GGML_ABORT(GGML_CUDA_NAME " error");
 }
@@ -2518,7 +2545,26 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         GGML_LOG_ERROR("%s: %s failed\n", __func__, ggml_op_desc(dst));
-        CUDA_CHECK(err);
+        // CUDA_CHECK(err);
+        fprintf(stderr,
+                "CUDA node failure: name=%s op=%s type=%s "
+                "shape=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] data=%p\n",
+                dst->name, ggml_op_desc(dst), ggml_type_name(dst->type),
+                dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], dst->data);
+        for (int i = 0; i < GGML_MAX_SRC; ++i) {
+            const ggml_tensor * src = dst->src[i];
+            if (src == nullptr) {
+                continue;
+            }
+            fprintf(stderr,
+                    "  src[%d]: name=%s type=%s shape=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] "
+                    "strides=[%zu,%zu,%zu,%zu] data=%p\n",
+                    i, src->name, ggml_type_name(src->type),
+                    src->ne[0], src->ne[1], src->ne[2], src->ne[3],
+                    src->nb[0], src->nb[1], src->nb[2], src->nb[3], src->data);
+        }
+        fflush(stderr);
+        ggml_cuda_error("cudaGetLastError()", __func__, __FILE__, __LINE__, (int) err, cudaGetErrorString(err));
     }
 
     return true;

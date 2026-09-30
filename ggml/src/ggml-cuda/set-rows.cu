@@ -377,8 +377,9 @@ static __global__ void k_set_rows_turbo3(
     if (lane % 4 == 0) blk->qs[qs_byte_idx] = qs_byte;
 
     // Pack signs: 8 elements per byte, 1 bit each.  __ballot_sync across warp.
-    // Ballot is per-warp (32 bits); extract local byte, write to global position in block.
-    const uint32_t ballot = __ballot_sync(0xffffffff, (idx >> 2) & 1);
+    // HIP wave64 ballots contain two logical warps; select ours before narrowing.
+    const int ballot_shift = (j % ggml_cuda_get_physical_warp_size()) / WARP_SIZE * WARP_SIZE;
+    const uint32_t ballot = uint32_t(uint64_t(__ballot_sync(0xffffffff, (idx >> 2) & 1)) >> ballot_shift);
     const int local_signs_byte = lane / 8;             // byte within 32-bit ballot (0..3)
     const int global_signs_byte = elem_in_block / 8;   // byte within block's signs array
     const uint8_t signs_byte = (uint8_t)((ballot >> (local_signs_byte * 8)) & 0xFF);
@@ -505,7 +506,8 @@ static __global__ void k_set_rows_turbo3_tail(
     }
     if (lane % 4 == 0) blk->qs[lane / 4] = qs_byte;
 
-    const uint32_t ballot = __ballot_sync(0xffffffff, (idx >> 2) & 1);
+    const int ballot_shift = (j % ggml_cuda_get_physical_warp_size()) / WARP_SIZE * WARP_SIZE;
+    const uint32_t ballot = uint32_t(uint64_t(__ballot_sync(0xffffffff, (idx >> 2) & 1)) >> ballot_shift);
     const int signs_byte_idx = lane / 8;
     const uint8_t signs_byte = (uint8_t)((ballot >> (signs_byte_idx * 8)) & 0xFF);
     if (lane % 8 == 0) blk->signs[signs_byte_idx] = signs_byte;

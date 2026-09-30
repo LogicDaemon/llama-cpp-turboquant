@@ -1,3 +1,9 @@
+<!-- https://github.com/LogicDaemon/llama-cpp-turboquant prefix -->
+This is [thecodacus/llama.cpp@perf](https://github.com/thecodacus/llama.cpp/tree/perf), squashed at [27c54b4](https://github.com/thecodacus/llama.cpp/commit/27c54b4bbcefadedcec6397477cc2e866c1db716) on top of [TheTom/llama-cpp-turboquant@tqp-v0.1.1](https://github.com/TheTom/llama-cpp-turboquant/releases/tag/tqp-v0.1.1), rebased onto ggml-org/llama.cpp. Local compatibility and correctness fixes are kept in the final commit, separate from the perf squash.
+
+README below is merged.
+<!-- end of https://github.com/LogicDaemon/llama-cpp-turboquant prefix -->
+
 # llama.cpp
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
@@ -46,7 +52,7 @@ GGML_CUDA_REGISTER_HOST=1 GGML_SCHED_PREFETCH_EXPERTS=1 \
 
 Result: **~1143 → ~1880 t/s** prefill (**+64%**) — same GPU, same settings, token-identical.
 
-Branches: [`fable5/host-register`](https://github.com/thecodacus/llama.cpp/tree/fable5/host-register) (pinning only) · [`fable5/prefetch-experts`](https://github.com/thecodacus/llama.cpp/tree/fable5/prefetch-experts) (both — this branch).
+Source branch: [`perf`](https://github.com/thecodacus/llama.cpp/tree/perf) (prefetch, hot-expert cache, and async CPU splits). Earlier branches: [`fable5/host-register`](https://github.com/thecodacus/llama.cpp/tree/fable5/host-register) (pinning only) and [`fable5/prefetch-experts`](https://github.com/thecodacus/llama.cpp/tree/fable5/prefetch-experts) (pinning and prefetch).
 
 ## ⚡ This fork — MoE expert cache (VRAM-resident hot experts)
 
@@ -68,6 +74,14 @@ Measured on an RTX 3060 12GB (`-ngl 99 -ncmoe 99 -fa 1`):
 
 Supported architectures: `qwen35moe`, `qwen4exp` (Qwen3.8-Flash-Next), `deepseek2`, `laguna` (plain fused-SILU gated expert FFN,
 separate gate/up/down tensors). Other architectures run unchanged.
+
+Check the startup `arch` value, not the model's marketing name. At the imported perf revision `27c54b4`, `qwen3next` is not wired to use the hot packs; allocating a pack alone does not establish that the model's graph uses it. GGUFs with fused gate/up expert tensors are also ineligible.
+
+### What the knobs control
+
+- `--cpu-moe` keeps all routed expert weights on the host and overrides `--n-cpu-moe N`, which applies only to the first N layers.
+- `--moe-cache-slots S` allocates up to S experts per eligible host-resident layer. Both a positive slot count and `--moe-cache-profile` are required; slots alone do nothing.
+- The profile ranks experts by decode routing frequency. Their weights are copied to VRAM once at load time; the selection stays fixed until reload. This is not a demand-filled or LRU SSD cache, and the original host weights remain mapped/allocated.
 
 ### Quick start
 
@@ -142,10 +156,12 @@ A warning instead of this line means the cache fell back to baseline (see Tuning
 
 | Symptom | Cause |
 | --- | --- |
+| Slots change neither VRAM nor logs | No profile supplied, or slot count is non-positive. |
 | `cannot open profile '...'` | Path not visible to the process (e.g. not mounted into the container). |
 | `pack allocation failed` | Slot count too big — read the fit math in the warning and reduce. |
 | `no CPU-resident MoE layers` | Experts are already on GPU (no `--n-cpu-moe`) — nothing to cache. |
 | No init line, no warning | Architecture not wired for the cache — model runs unchanged. |
+| Pack allocated but no cache benefit | Check graph support, separate gate/up tensors, and profile coverage; allocation alone is not proof of use. |
 | Model loads, then context creation OOMs | Pack fits but KV/compute don't — drop a few slots or shrink/compress KV. |
 
 ## Recent API changes

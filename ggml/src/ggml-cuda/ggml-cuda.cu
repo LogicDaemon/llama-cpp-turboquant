@@ -871,18 +871,17 @@ ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
 }
 
 #ifdef USE_CUDA_GRAPH
-ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(const void * first_node_ptr, int64_t time_now) {
-    // Give all cached graphs 10s to be reused after an idle period, without updating each graph.
+ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(uint64_t graph_key, int64_t time_now) {
+    // Give cached graphs 10s to be reused after an idle period, then sweep every 5s.
     if (!cuda_graphs.empty() && time_now - last_graph_use_time >= 10'000'000) {
         next_graph_eviction_time = time_now + 10'000'000;
     }
     last_graph_use_time = time_now;
 
-    // Sweep every 5s during active use, evicting graphs unused for at least 10s.
     if (time_now >= next_graph_eviction_time) {
         next_graph_eviction_time = time_now + 5'000'000;
         for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
-            if (it->first != first_node_ptr && time_now - it->second->last_used_time >= 10'000'000) {
+            if (it->first != graph_key && time_now - it->second->last_used_time >= 10'000'000) {
                 it = cuda_graphs.erase(it);
             } else {
                 ++it;
@@ -890,12 +889,25 @@ ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(const void * first_node_
         }
     }
 
-    auto it = cuda_graphs.find(first_node_ptr);
+    auto it = cuda_graphs.find(graph_key);
     if (it == cuda_graphs.end()) {
-        it = cuda_graphs.emplace(first_node_ptr, std::make_unique<ggml_cuda_graph>()).first;
+        while (cuda_graphs.size() >= max_cuda_graphs) {
+            auto lru = cuda_graphs.begin();
+            for (auto c = cuda_graphs.begin(); c != cuda_graphs.end(); ++c) {
+                if (c->second->last_used_time < lru->second->last_used_time) {
+                    lru = c;
+                }
+            }
+            cuda_graphs.erase(lru);
+        }
+        it = cuda_graphs.emplace(graph_key, std::make_unique<ggml_cuda_graph>()).first;
     }
     it->second->last_used_time = time_now;
     return it->second.get();
+}
+
+ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(const void * first_node_ptr, int64_t time_now) {
+    return cuda_graph(reinterpret_cast<uint64_t>(first_node_ptr), time_now);
 }
 
 bool ggml_backend_cuda_context::any_cuda_graph_enabled() const {
@@ -2691,15 +2703,20 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
         }
     }
 
-    if (ggml_cuda_should_use_mmq_few(src0, src1, dst->src[2], cc)) {
+    // ids containing -1 (hot/cold expert-pack split, op_params[0] != 0) are supported by the
+    // mmvq and general paths only; mmq/mmf are skipped, so those nodes take the syncing
+    // fallback and must not be captured in a CUDA graph. Mirrors ggml_cuda_mul_mat_id().
+    const bool ids_may_skip = dst->op_params[0] != 0;
+
+    if (!ids_may_skip && ggml_cuda_should_use_mmq_few(src0, src1, dst->src[2], cc)) {
         return false;
     }
 
-    if (ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[2], /*n_experts=*/src0->ne[2])) {
+    if (!ids_may_skip && ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[2], /*n_experts=*/src0->ne[2])) {
         return false;
     }
 
-    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
+    if (!ids_may_skip && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
         return false;
     }
 
@@ -2723,8 +2740,11 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     // TQ weight types use dequant-to-f16 cuBLAS path only (no mmvq/mmq kernels)
     const bool is_tq_weight_id = (src0->type == GGML_TYPE_TQ4_1S || src0->type == GGML_TYPE_TQ3_1S);
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+        // ids containing -1 (hot/cold expert-pack split, op_params[0] != 0) are
+        // supported by the mmvq and general paths only; mmq/mmf are skipped
+        const bool ids_may_skip = dst->op_params[0] != 0;
         // up to 24 tokens few-row MMQ is faster than MMQ, on DGX Spark also faster than MMVQ
-        const bool use_mmq_few = ggml_cuda_should_use_mmq_few(src0, src1, ids, cc);
+        const bool use_mmq_few = !ids_may_skip && ggml_cuda_should_use_mmq_few(src0, src1, ids, cc);
 
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (!use_mmq_few && ne2 <= MMVQ_MAX_BATCH_SIZE) {
@@ -2753,12 +2773,12 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             return;
         }
 
-        if (!is_tq_weight_id && ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
+        if (!ids_may_skip && !is_tq_weight_id && ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
             ggml_cuda_mul_mat_q(ctx, src0, src1, ids, dst);
             return;
         }
 
-        if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
+        if (!ids_may_skip && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
             ggml_cuda_mul_mat_f(ctx, src0, src1, ids, dst);
             return;
         }
@@ -2782,14 +2802,14 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     std::vector<int32_t> ids_to_sorted_host;
     ids_to_sorted_host.reserve(2*ne_get_rows);
-    std::vector<int32_t> ids_from_sorted_host(ne_get_rows);
+    std::vector<int32_t> ids_from_sorted_host(ne_get_rows, -1); // -1 = slot's expert not in this pack
 
     ggml_cuda_pool_alloc<int32_t> ids_buf_dev(ctx.pool(), 2*ne_get_rows);
 
     std::vector<int32_t> tokens_per_expert(ne02);
 
     ggml_cuda_pool_alloc<char> src1_sorted(ctx.pool(), ne12*n_expert_used*ne10*ts_src1_sorted);
-    ggml_cuda_pool_alloc<char>  dst_sorted(ctx.pool(), ne2 *n_expert_used* ne0*ts_dst_sorted);
+    ggml_cuda_pool_alloc<char>  dst_sorted(ctx.pool(), (ne2*n_expert_used + 1)*ne0*ts_dst_sorted); // +1 zero row for skipped slots
 
     std::vector<char> ids_host(ggml_nbytes(ids));
     CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids->data, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
@@ -2799,7 +2819,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         for (int64_t i12 = 0; i12 < ne12; ++i12) { // tokens
             for (int64_t iex = 0; iex < n_expert_used; ++iex) {
                 const int32_t expert_to_use = *(const int32_t *)(ids_host.data() + i12*ids->nb[1] + iex*ids->nb[0]);
-                assert(expert_to_use >= 0 && expert_to_use < ne02);
+                assert(expert_to_use >= -1 && expert_to_use < ne02); // -1 = skip (hot/cold expert split)
                 if (expert_to_use == i02) {
                     ids_from_sorted_host[i12*n_expert_used + iex] = ids_to_sorted_host.size();
                     ids_to_sorted_host.push_back(i12*ne11 + iex % ne11);
@@ -2810,7 +2830,20 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             }
         }
     }
-    GGML_ASSERT(ids_to_sorted_host.size() == size_t(ne_get_rows));
+    const int64_t ne_rows_used = ids_to_sorted_host.size();
+    GGML_ASSERT(ne_rows_used <= ne_get_rows);
+
+    if (ne_rows_used < ne_get_rows) {
+        // slots whose expert id was -1: scatter from a zeroed row so the
+        // pack outputs merge additively
+        CUDA_CHECK(cudaMemsetAsync(dst_sorted.ptr + ne_rows_used*ne0*ts_dst_sorted, 0, ne0*ts_dst_sorted, stream));
+        for (auto & v : ids_from_sorted_host) {
+            if (v < 0) {
+                v = ne_rows_used;
+            }
+        }
+        ids_to_sorted_host.resize(ne_get_rows, 0); // pad; rows past ne_rows_used are never gathered
+    }
 
     ids_to_sorted_host.insert(ids_to_sorted_host.end(), ids_from_sorted_host.begin(), ids_from_sorted_host.end());
 
@@ -3420,14 +3453,35 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
     return use_cuda_graph;
 }
 
-static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
-    return cgraph->nodes[0];
+// a captured graph hard-codes its shapes, so with one key per split an alternating shape
+// (a speculative verify batch) resets warmup forever. O(1) on purpose: walking nodes undoes the
+// point of a cuda graph. A shape this fails to separate re-captures as before, so it cannot regress.
+static uint64_t ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
+    // unlike the previous key this dereferences nodes[0], so an empty graph is not safe here
+    if (cgraph->n_nodes <= 0) {
+        return 0;
+    }
+
+    uint64_t key = (uint64_t) (uintptr_t) cgraph->nodes[0];
+
+    auto mix = [&key](uint64_t v) {
+        key = (key ^ v) * 0x100000001b3ull;
+    };
+
+    mix(cgraph->n_nodes);
+
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        mix(cgraph->nodes[0]->ne[d]);
+        mix(cgraph->nodes[cgraph->n_nodes - 1]->ne[d]);
+    }
+
+    return key;
 }
 
 static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
     bool res = false;
 
-    const void * graph_key = ggml_cuda_graph_get_key(cgraph);
+    const uint64_t graph_key = ggml_cuda_graph_get_key(cgraph);
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
 
     if (cgraph->uid != 0 &&
@@ -5387,7 +5441,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     return 0;
 }
 
-static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key) {
+static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, uint64_t graph_key) {
     bool graph_evaluated_or_captured = false;
 
     // flag used to determine whether it is an integrated_gpu
@@ -5617,7 +5671,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 }
 
 #ifdef USE_CUDA_GRAPH
-static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
+static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, uint64_t graph_key) {
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
 
     if (graph->instances.empty()) {
@@ -5640,7 +5694,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
     bool use_cuda_graph             = false;
     bool cuda_graph_update_required = false;
-    const void * graph_key = nullptr;
+    uint64_t graph_key = 0;
 
 #ifdef USE_CUDA_GRAPH
     graph_key = ggml_cuda_graph_get_key(cgraph);
@@ -5877,7 +5931,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     }
 
 #ifdef USE_CUDA_GRAPH
-    const void * graph_key = ggml_cuda_graph_get_key(cgraph);
+    const uint64_t graph_key = ggml_cuda_graph_get_key(cgraph);
     const bool use_cuda_graph = ggml_cuda_graph_set_enabled(cuda_ctx, graph_key);
 #else
     const bool use_cuda_graph = false;

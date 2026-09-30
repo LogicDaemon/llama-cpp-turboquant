@@ -5990,6 +5990,11 @@ struct test_mul_mat_id : public test_case {
 
         ggml_tensor * out = ggml_mul_mat_id(ctx, as, b, ids);
         ggml_set_name(out, "out");
+        if (skip) {
+            // announce that ids may contain -1 so backends route around
+            // kernels without skip support (mirrors llama's pack nodes)
+            out->op_params[0] = 1;
+        }
 
         return out;
     }
@@ -12239,6 +12244,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 1, 5120, {128, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
 #endif
+    // hot/cold expert-pack split: ids may be -1 ("expert not owned by this pack") and the
+    // op must emit zero rows for those slots — cover mmvq (n=1), mmq (n=64), mmf (f16) and
+    // the general fallback across quantized/float types
+    for (ggml_type ta : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_F32}) {
+        test_cases.emplace_back(new test_mul_mat_id(ta, GGML_TYPE_F32, 16, 8, false, 256, 1, 256, 0, false, true));
+        test_cases.emplace_back(new test_mul_mat_id(ta, GGML_TYPE_F32, 16, 8, false, 256, 4, 256, 0, false, true));
+        test_cases.emplace_back(new test_mul_mat_id(ta, GGML_TYPE_F32, 16, 8, false, 256, 64, 256, 0, false, true));
+    }
 
     for (ggml_type type_a : all_types) {
         for (int i = 1; i < 10; ++i) {
@@ -12375,6 +12388,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // CUDA few-row MMQ for MUL_MAT_ID: strided experts, more than 32 experts
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32,  16, 4, true,  72, 13, 2048, 80));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 128, 8, false, 72, 16, 2048));
+    // The same few-row shapes with skipped expert slots must use a skip-aware path.
+    // mask_skipped_ids also makes every fourth token skip all of its experts.
+    for (int n : {13, 24}) {
+        for (bool broadcast : {false, true}) {
+            test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 16, 4, broadcast, 72, n, 2048, 0, false, true));
+        }
+    }
 
     // TQ4_1S: Gemma-4 E2B dimensions. The fused mul_mat_vec kernel has a
     // shared-memory WHT on the activation and dequantizes centroid*scale per

@@ -2343,7 +2343,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * down_exps_s,
          ggml_tensor * selected_experts_in,
          ggml_tensor * post_exp_norm,
-               float   post_exp_norm_eps) const {
+               float   post_exp_norm_eps,
+   const llama_layer * moe_pack_layer) const {
     return build_moe_ffn(
         cur,
         gate_inp,  /* gate_inp_b  */ nullptr,
@@ -2366,7 +2367,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         down_exps_s,
         selected_experts_in,
         post_exp_norm,
-        post_exp_norm_eps
+        post_exp_norm_eps,
+        moe_pack_layer
     );
 }
 
@@ -2393,10 +2395,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * gate_up_exps_b,
          ggml_tensor * up_exps_s,
          ggml_tensor * gate_exps_s,
-         ggml_tensor * down_exps_s,
-         ggml_tensor * selected_experts_in,
-         ggml_tensor * post_exp_norm,
-               float   post_exp_norm_eps) const {
+          ggml_tensor * down_exps_s,
+          ggml_tensor * selected_experts_in,
+          ggml_tensor * post_exp_norm,
+                float   post_exp_norm_eps,
+    const llama_layer * moe_pack_layer) const {
     const llm_arch arch = model.arch;
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
@@ -2494,6 +2497,26 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(selected_experts->src[0], "ffn_moe_argsort", il);
     }
     cb(selected_experts, "ffn_moe_topk", il);
+
+    // MoE expert cache: split routed ids into hot-pack ids and cold ids.
+    // scope: plain fused-SILU gated FFN (no clamp, no expert biases/scales,
+    // no pre-FFN weighting) — the dual chains below reproduce exactly that
+    ggml_tensor * ids_hot  = nullptr;
+    ggml_tensor * ids_cold = nullptr;
+    // Upstream's dynamic expert cache takes precedence when configured.
+    const bool use_moe_packs = moe_cache == nullptr && moe_pack_layer && moe_pack_layer->moe_map_hot && !gate_up_exps &&
+        !gate_up_exps_b && !up_exps_s && !gate_exps_s && !down_exps_s &&
+        type_op == LLM_FFN_SILU && gate_exps && !up_exps_b && !gate_exps_b && !weight_before_ffn && loras->empty() &&
+        (hdmd == nullptr || (hdmd->rot.count(up_exps) == 0 && hdmd->rot.count(gate_exps) == 0 && hdmd->rot.count(down_exps) == 0)) &&
+        arch != LLM_ARCH_MISTRAL4 && arch != LLM_ARCH_MELLUM && arch != LLM_ARCH_FLINT && arch != LLM_ARCH_LAGUNA &&
+        (il < 0 || hparams.swiglu_clamp_exp[il] <= 1e-6f);
+    if (use_moe_packs) {
+        ggml_tensor * ids_flat = ggml_cont_1d(ctx0, selected_experts, n_expert_used*n_tokens); // topk ids are a strided view
+        ids_hot  = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, moe_pack_layer->moe_map_hot,  ids_flat), n_expert_used, n_tokens);
+        ids_cold = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, moe_pack_layer->moe_map_cold, ids_flat), n_expert_used, n_tokens);
+        cb(ids_hot,  "ffn_moe_ids_hot",  il);
+        cb(ids_cold, "ffn_moe_ids_cold", il);
+    }
 
     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
         // TODO: Use scalar div instead when/if implemented
@@ -2655,7 +2678,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                         }
                     }
                 }
-
                 if (has_gate) {
                     cur = ggml_swiglu_split(ctx0, cur, up);
                     cb(cur, "ffn_moe_swiglu", il);
@@ -2737,12 +2759,39 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         return experts;
     };
 
-    ggml_tensor * experts = cache.slots == nullptr ?
-        build_experts(cur, selected_experts, nullptr, true) :
-        moe_cache->build_experts(*this, cache, cur, selected_experts,
-                [](ggml_tensor * cur, ggml_tensor * ids, ggml_tensor * mm_ids, bool cached, void * user_data) {
-                    return (*static_cast<decltype(build_experts) *>(user_data))(cur, ids, mm_ids, cached);
-                }, &build_experts);
+    ggml_tensor * experts = nullptr;
+    if (use_moe_packs) {
+        // Keep each residency side's FFN chain in one graph split; zero rows from the other pack add to zero.
+        auto build_pack_chain = [&](ggml_tensor * w_gate, ggml_tensor * w_up, ggml_tensor * w_down, ggml_tensor * ids) {
+            ggml_tensor * gate = ggml_mul_mat_id(ctx0, w_gate, cur, ids);
+            gate->op_params[0] = 1;
+            ggml_tensor * up = ggml_mul_mat_id(ctx0, w_up, cur, ids);
+            up->op_params[0] = 1;
+            ggml_tensor * act = ggml_swiglu_split(ctx0, gate, up);
+            ggml_tensor * down = ggml_mul_mat_id(ctx0, w_down, act, ids);
+            down->op_params[0] = 1;
+            return down;
+        };
+
+        ggml_tensor * cold = build_pack_chain(gate_exps, up_exps, down_exps, ids_cold);
+        cb(cold, "ffn_moe_down_cold", il);
+        ggml_tensor * hot = build_pack_chain(moe_pack_layer->ffn_gate_exps_hot, moe_pack_layer->ffn_up_exps_hot, moe_pack_layer->ffn_down_exps_hot, ids_hot);
+        cb(hot, "ffn_moe_down_hot", il);
+        experts = ggml_add(ctx0, cold, hot);
+        cb(experts, "ffn_moe_down", il);
+
+        if (cparams.sched_async_cpu && n_tokens <= 8) {
+            ggml_backend_sched_set_tensor_backend(sched, experts, backend_cpu);
+        }
+    } else {
+        // llama_moe_cache::build_experts handles the cached experts and host misses.
+        experts = cache.slots == nullptr ?
+            build_experts(cur, selected_experts, nullptr, true) :
+            moe_cache->build_experts(*this, cache, cur, selected_experts,
+                    [](ggml_tensor * cur, ggml_tensor * ids, ggml_tensor * mm_ids, bool cached, void * user_data) {
+                        return (*static_cast<decltype(build_experts) *>(user_data))(cur, ids, mm_ids, cached);
+                    }, &build_experts);
+    }
 
     if (down_exps_s) {
         cb(experts, "ffn_moe_down_scaled", il);
@@ -3416,6 +3465,12 @@ ggml_tensor * llm_graph_context::build_attn(
         kq_b = ggml_pad(ctx0, kq_b, n_kv_pad, 0, 0, 0);
     }
 
+    // TurboQuant pre-rotate-queries: O(d log d) WHT rotation matching the K rotation
+    if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0) {
+        if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
+        q = ggml_turbo_wht(ctx0, q, 0, 0, nullptr);  // 0 = forward, 0 = auto group size
+    }
+
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
@@ -3846,6 +3901,12 @@ ggml_tensor * llm_graph_context::build_attn(
     const int64_t n_embd_v = v_cur ? v_cur->ne[0] : v_mla->ne[0];
     ggml_tensor * v = ggml_view_4d(ctx0, k, n_embd_v, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
+    // TurboQuant pre-rotate-queries: O(d log d) WHT rotation matching the K rotation
+    if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0) {
+        if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
+        q = ggml_turbo_wht(ctx0, q, 0, 0, mctx_cur->get_turbo_innerq_scale_inv());  // 0 = forward, 0 = auto group size
+    }
+
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, nullptr, sinks, v_mla, top_k->ne[0], kq_scale, il);
     cb(cur, "kqv_out", il);
 
@@ -4120,6 +4181,12 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
+
+    // TurboQuant pre-rotate-queries: O(d log d) WHT rotation matching the K rotation
+    if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0) {
+        if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
+        q = ggml_turbo_wht(ctx0, q, 0, 0, nullptr);  // 0 = forward, 0 = auto group size
+    }
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);

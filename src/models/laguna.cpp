@@ -284,7 +284,10 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
                     hparams.expert_weights_norm,
                     hparams.expert_weights_scale,
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
-                    il);
+                    il,
+                    nullptr, nullptr,
+                    nullptr, nullptr, nullptr,
+                    nullptr, nullptr, 1e-5f, &model.layers[il]);
             cb(moe_out, "ffn_moe_out", il);
 
             // Always-on shared expert, summed in parallel.

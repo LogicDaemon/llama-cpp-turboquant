@@ -511,15 +511,14 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
 // ---------------------------------------------------------------------------
 // turbo4 (4-bit PolarQuant) shared-memory tile loader for the MMA decode path.
 //
-// OUR Lloyd-Max centroids (copied verbatim from turbo-quant.cuh:297). Each .cu
-// object needs its own __constant__, so we keep a fattn-local copy here. DO NOT
-// substitute buun's table (-0.241556..) — different codebook => corrupt dequant.
-// (These match the live TURBO_CENTROIDS_4BIT exactly.)
+// TQ+ KV centroids, matching TURBO_CENTROIDS_4BIT in turbo-quant.cuh.
+// Each .cu object needs its own __constant__, so we keep a fattn-local copy here.
+// Keep both copies identical: a different codebook would corrupt dequantization.
 static __constant__ float TURBO_CENTROIDS_4BIT_FATTN[16] = {
-    -0.241529f, -0.182877f, -0.143016f, -0.111036f,
-    -0.083292f, -0.058050f, -0.034299f, -0.011349f,
-     0.011349f,  0.034299f,  0.058050f,  0.083292f,
-     0.111036f,  0.143016f,  0.182877f,  0.241529f
+    -0.173926f, -0.117195f, -0.089527f, -0.068756f,
+    -0.051262f, -0.035597f, -0.020989f, -0.006938f,
+     0.006938f,  0.020989f,  0.035597f,  0.051262f,
+     0.068756f,  0.089527f,  0.117195f,  0.173926f
 };
 
 // Dequantize a turbo4_0-quantized tile (block_turbo4_0 = ggml_half norm + uint8_t qs[64],
@@ -577,8 +576,8 @@ static __device__ __forceinline__ void flash_attn_ext_turbo4_load_tile(
 // bits (qs, 4/byte) + 1 high bit (signs, 8/byte); reconstruction byte-identical to
 // vec_dot_fattn_vec_KQ_turbo3_0. Same row / half2-col layout as the turbo4 loader.
 static __constant__ float TURBO_CENTROIDS_3BIT_FATTN[8] = {
-    -0.190207f, -0.118786f, -0.066822f, -0.021663f,
-     0.021663f,  0.066822f,  0.118786f,  0.190207f
+    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+     0.021460f,  0.065717f,  0.117832f,  0.190685f
 };
 template<int stride_tile, int nbatch_fa, int nthreads, bool oob_check>
 static __device__ __forceinline__ void flash_attn_ext_turbo3_load_tile(

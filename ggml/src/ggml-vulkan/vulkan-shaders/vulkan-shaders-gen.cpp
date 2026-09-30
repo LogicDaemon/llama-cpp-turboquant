@@ -764,14 +764,16 @@ void process_shaders() {
             // the shader gets turbo-only K/V bindings (no f16 alias) and the dequant
             // path runs the per-element centroid lookup (graph applies WHT to Q
             // pre-attention and inverse WHT to output post-attention).
+            auto turbo_fa_dict = fa_base_dict;
+            turbo_fa_dict.erase("DATA_A_IQ4_NL");
             for (std::string turbo : {"turbo2_0", "turbo3_0", "turbo4_0"}) {
                 const std::string data_a = "DATA_A_" + to_uppercase(turbo);
                 string_to_spv("flash_attn_f32_f16_" + turbo, "flash_attn.comp",
-                    merge_maps(fa_base_dict, {{data_a, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, false, f16acc);
+                    merge_maps(turbo_fa_dict, {{data_a, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, false, f16acc);
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
                 if (fp16) {
                     string_to_spv("flash_attn_f32_f16_" + turbo, "flash_attn_cm1.comp",
-                        merge_maps(fa_base_dict, {{data_a, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}), fp16, true, false, f16acc);
+                        merge_maps(turbo_fa_dict, {{data_a, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}), fp16, true, false, f16acc);
                 }
 #endif
             }

@@ -5198,7 +5198,7 @@ struct test_mul_mat_w4a4 : public test_mul_mat {
     }
 };
 
-static void init_mul_mat_id_ids(ggml_context * ctx, int n_mats) {
+static void init_mul_mat_id_ids(ggml_context * ctx, int n_mats, bool skip_ids = false) {
     std::random_device rd;
     std::default_random_engine rng(rd());
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
@@ -5211,12 +5211,18 @@ static void init_mul_mat_id_ids(ggml_context * ctx, int n_mats) {
                 data[i] = i % n_mats;
             }
             std::shuffle(data.begin(), data.end(), rng);
+            if (skip_ids) {
+                // -1 marks an expert not owned by this pack; keep slot 0 valid.
+                for (int i = 1; i < t->ne[0]; i += 2) {
+                    data[i] = -1;
+                }
+            }
             ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
         }
     }
 }
 
-static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float amax = 1.0f) {
+static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float amax = 1.0f, bool skip_ids = false) {
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
         if (t->type == GGML_TYPE_I32) {
             continue;
@@ -5227,7 +5233,7 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float amax =
             init_tensor_uniform(t);
         }
     }
-    init_mul_mat_id_ids(ctx, n_mats);
+    init_mul_mat_id_ids(ctx, n_mats, skip_ids);
 }
 
 // GGML_OP_MUL_MAT_ID
@@ -5242,9 +5248,10 @@ struct test_mul_mat_id : public test_case {
     const int64_t k;
     const float amax; // magnitude of src1
     const int64_t m_v; // rows of as in memory, the experts of as are strided for m_v > m, no view for m_v == 0
+    const bool skip_ids; // some ids are -1 (hot/cold expert-pack split)
 
     std::string vars() override {
-        return VARS_TO_STR10(type_a, type_b, n_mats, n_used, b, m, n, k, amax, m_v);
+        return VARS_TO_STR11(type_a, type_b, n_mats, n_used, b, m, n, k, amax, m_v, skip_ids);
     }
 
     double max_nmse_err() override {
@@ -5269,9 +5276,9 @@ struct test_mul_mat_id : public test_case {
     test_mul_mat_id(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
             int64_t m = 32, int64_t n = 32, int64_t k = 32,
-            float amax = 1.0f, int64_t m_v = 0)
+            float amax = 1.0f, int64_t m_v = 0, bool skip_ids = false)
         : type_a(type_a), type_b(type_b), n_mats(n_mats), n_used(n_used), b(b),
-            m(m), n(n), k(k), amax(amax), m_v(m_v) {
+            m(m), n(n), k(k), amax(amax), m_v(m_v), skip_ids(skip_ids) {
             GGML_ASSERT(n_used <= n_mats);
             GGML_ASSERT(m_v == 0 || m_v > m);
         }
@@ -5296,6 +5303,11 @@ struct test_mul_mat_id : public test_case {
 
         ggml_tensor * out = ggml_mul_mat_id(ctx, as, b, ids);
         ggml_set_name(out, "out");
+        if (skip_ids) {
+            // announce that ids may contain -1 so backends route around
+            // kernels without skip support (mirrors llama's pack nodes)
+            out->op_params[0] = 1;
+        }
 
         if (amax > 65504.0f) {
             // src1 exceeds F16 range
@@ -5306,11 +5318,11 @@ struct test_mul_mat_id : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        init_mul_mat_id_tensors(ctx, n_mats, amax);
+    init_mul_mat_id_tensors(ctx, n_mats, amax, skip_ids);
     }
 
     void reinit_perf_iter(ggml_context * ctx) override {
-        init_mul_mat_id_ids(ctx, n_mats);
+        init_mul_mat_id_ids(ctx, n_mats, skip_ids);
     }
 };
 
@@ -10373,6 +10385,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 1, 5120, {128, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
 #endif
+    // hot/cold expert-pack split: ids may be -1 ("expert not owned by this pack") and the
+    // op must emit zero rows for those slots — cover mmvq (n=1), mmq (n=64), mmf (f16) and
+    // the general fallback across quantized/float types
+    for (ggml_type ta : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_F32}) {
+        test_cases.emplace_back(new test_mul_mat_id(ta, GGML_TYPE_F32, 16, 8, false, 256, 1, 256, 1.0f, 0, /*skip_ids=*/true));
+        test_cases.emplace_back(new test_mul_mat_id(ta, GGML_TYPE_F32, 16, 8, false, 256, 4, 256, 1.0f, 0, /*skip_ids=*/true));
+        test_cases.emplace_back(new test_mul_mat_id(ta, GGML_TYPE_F32, 16, 8, false, 256, 64, 256, 1.0f, 0, /*skip_ids=*/true));
+    }
 
     for (ggml_type type_a : all_types) {
         for (int i = 1; i < 10; ++i) {

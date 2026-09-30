@@ -648,7 +648,9 @@ llama_model_deepseek2::graph::graph(const llm_graph_params & params) :
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 nullptr,
-                model.layers[il].ffn_gate_up_exps);
+                model.layers[il].ffn_gate_up_exps,
+                nullptr, nullptr, nullptr,
+                nullptr, nullptr, 1e-5f, &model.layers[il]);
             cb(moe_out, "ffn_moe_out", il);
 
             // FFN shared expert

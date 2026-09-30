@@ -474,9 +474,6 @@ void main() {
     if (sg_lane % 2u == 0u) {
         data_q[db].qs[t / 2u] = uint8_t(qs_byte);
     }
-    if (t == 0u) {
-        data_q[db].rnorm = float16_t(0.0);  // reserved in 4-bit mode
-    }
 #else
     // pack qs: 4 elements per byte (2-bit each) via subgroup shuffle
     uint my_low2 = idx & 0x3u;
@@ -530,16 +527,16 @@ void main() {
     const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
     const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
 
-    // Step 1: load one f32 input per thread
-    float val = data_s[sb + t];
+    // Step 1: promote the input to f32, one element per thread
+    float val = float(data_s[sb + t]);
 
     // Step 2: Forward RHT via subgroup ops
     // Sign flip
     val *= TQ4_SIGNS[t];
 
-    // WHT butterfly via subgroupShuffleXor
+    // Indexed shuffle uses the already-required subgroup shuffle capability.
     [[unroll]] for (uint h = 1u; h < 32u; h <<= 1u) {
-        const float other = subgroupShuffleXor(val, h);
+        const float other = subgroupShuffle(val, t ^ h);
         val = ((t & h) == 0u) ? (val + other) : (other - val);
     }
 

@@ -117,7 +117,12 @@ GGML_API void dequantize_row_turbo2_0(const block_turbo2_0 * GGML_RESTRICT x, fl
 GGML_API size_t quantize_turbo2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
 // WHT group size for the turbo CPU quantize path (set by the CPU SET_ROWS handler)
+// GGML_API includes extern except in visibility-only shared builds.
+#if defined(GGML_SHARED) && (!defined(_WIN32) || defined(__MINGW32__))
+extern GGML_API int turbo3_cpu_wht_group_size;
+#else
 GGML_API int turbo3_cpu_wht_group_size;
+#endif
 
 // TQ3_1S: WHT-rotated 3-bit weight quantization (8-level Lloyd-Max)
 GGML_API void quantize_row_tq3_1s_ref(const float * GGML_RESTRICT x, block_tq3_1s * GGML_RESTRICT y, int64_t k);

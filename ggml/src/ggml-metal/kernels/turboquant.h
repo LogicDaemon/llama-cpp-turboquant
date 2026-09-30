@@ -131,7 +131,6 @@ void quantize_turbo4_0(device const float * src, device block_turbo4_0 & dst) {
         dst.qs[i / 2] |= q << ((i & 1) * 4);
         recon_sq += turbo_centroids_4bit[q] * turbo_centroids_4bit[q];
     }
-    dst.rnorm = half(0.0f);
     const float recon = sqrt(recon_sq);
     dst.norm = half(recon > 1e-10f ? norm / recon : norm);
 }

@@ -328,7 +328,7 @@ static void ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2(ggml_backend_cuda_c
     ggml_cuda_flash_attn_ext_mma_turbo_case<DKQ, DV, 8, 1, type_K, type_V>(ctx, dst); // ncols2 = 1 -> (8,1)
 }
 
-// Env latch for the fused turbo4 MMA decode path. DEFAULT OFF.
+// Env latch for the fused TurboQuant MMA decode path. DEFAULT ON.
 //
 // The MMA path is correctness-validated (coherent output, KLD == VEC baseline 0.008396)
 // and faster than VEC at every depth (beats rival "buun"), BUT it is NOT bit/token-identical
@@ -336,8 +336,7 @@ static void ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2(ggml_backend_cuda_c
 // reduction trees (tensor-core fragment order vs per-thread VEC order), so a near-tie greedy
 // token can flip (~1 in ~25 tokens on a hard tie). This is the same irreducible f16-order
 // difference that exists between the base f16-MMA and f16-VEC kernels — not a regression — but
-// it fails strict token-identity. We therefore keep VEC the default and expose the faster MMA
-// path as opt-in via GGML_TURBO_MMA_FUSED=1.
+// it fails strict token-identity. Set GGML_TURBO_MMA_FUSED=0 to use the VEC reference.
 static bool ggml_cuda_turbo_mma_fused() {
     static const bool v = []{
         const char * s = getenv("GGML_TURBO_MMA_FUSED");
@@ -726,12 +725,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             return BEST_FATTN_KERNEL_NONE;
     }
 
-    // turbo kernels are instantiated only for head dims that are multiples of 64
-    // (turbo4: multiples of 128, matching its block size).
+    // Quantized K/V rows must contain whole blocks, independently of kernel instantiations.
     {
         auto turbo_geom_ok = [](ggml_type t, int64_t ne0) {
-            if (t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0) return ne0 % 64 == 0;
-            if (t == GGML_TYPE_TURBO4_0) return ne0 % 128 == 0;
+            if (t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0) {
+                return ne0 % ggml_blck_size(t) == 0;
+            }
             return true;
         };
         if (!turbo_geom_ok(K->type, K->ne[0]) || !turbo_geom_ok(V->type, V->ne[0])) {
@@ -919,7 +918,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     // Routes turbo4-K==turbo4-V, D in {128,256}, decode (Q->ne[1] <= 4) onto the GQA-packed
     // MMA path (KV read once per head-group instead of per query head). Q is ALREADY
     // graph-rotated (src/llama-graph.cpp) and the FA output is inverse-rotated there — this
-    // path does NO inline FWHT and NO src swap. Default OFF (env unset / !=1) falls straight
+    // path does NO inline FWHT and NO src swap.
     // GGML_TURBO_MMA_FUSED=0 falls straight through to the original VEC dispatch (kill-switch).
     {
         const ggml_tensor * Q = dst->src[0];

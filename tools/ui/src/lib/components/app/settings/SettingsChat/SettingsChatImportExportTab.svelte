@@ -9,7 +9,8 @@
 	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
 	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '$lib/enums';
 	import { ConversationTransferService } from '$lib/services';
-	import { conversationsStore, settingsStore } from '$lib/stores';
+	import { exportSettings, importSettings } from '$lib/services/settings-transfer.service';
+	import { conversationsStore } from '$lib/stores';
 	import { createMessageCountMap } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';
@@ -45,7 +46,7 @@
 		showSettingsExportDialog = false;
 
 		try {
-			const data = settingsStore.exportSettings(includeSensitiveData);
+			const data = exportSettings(includeSensitiveData);
 			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');
@@ -92,7 +93,7 @@
 						return;
 					}
 
-					settingsStore.importSettings(data);
+					importSettings(data);
 
 					showSettingsImportSummary = true;
 					showSettingsExportSummary = false;

@@ -457,6 +457,16 @@ class ToolsStore {
 		this.persistDisabledToolCategories();
 	}
 
+	setDisabledToolCategories(sources: ToolSource[]): void {
+		this._disabledToolCategories = new SvelteSet(sources);
+		this.persistDisabledToolCategories();
+	}
+
+	setDisabledTools(keys: string[]): void {
+		this._disabledTools = new SvelteSet(keys);
+		this.persistDisabledTools();
+	}
+
 	setToolEnabled(key: string, enabled: boolean): void {
 		if (enabled) {
 			this._disabledTools.delete(key);

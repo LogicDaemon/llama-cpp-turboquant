@@ -180,4 +180,7 @@ export interface SettingsExportType {
 	config: SettingsConfigType;
 	/** Keys that differ from server defaults (derived, but persisted for fidelity) */
 	userOverrides: string[];
+	disabledTools?: string[];
+	disabledToolCategories?: string[];
+	alwaysAllowedTools?: string[];
 }

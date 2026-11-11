@@ -378,7 +378,7 @@ static __global__ void k_set_rows_turbo3(
 
     // Pack signs: 8 elements per byte, 1 bit each.  __ballot_sync across warp.
     // Outdated on wave64: Ballot is per-warp (32 bits); extract local byte, write to global position in block.
-    // HIP ballots cover the physical warp, including both logical 32-lane groups on wave64.
+    // HIP wave64 ballots contain two logical warps; select ours before narrowing.
     const ggml_cuda_thread_mask_t ballot = ggml_cuda_ballot((idx >> 2) & 1);
     const int local_signs_byte = (j % ggml_cuda_get_physical_warp_size()) / 8;
     const int global_signs_byte = elem_in_block / 8;   // byte within block's signs array

@@ -2420,7 +2420,8 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     }
 
     // do not fuse the matmuls that few-row MMQ takes in ggml_cuda_mul_mat_id
-    if (tensor->op == GGML_OP_MUL_MAT_ID && ggml_cuda_should_use_mmq_few(src0, src1, tensor->src[2], cc)) {
+    if (tensor->op == GGML_OP_MUL_MAT_ID && tensor->op_params[0] == 0 &&
+            ggml_cuda_should_use_mmq_few(src0, src1, tensor->src[2], cc)) {
         return false;
     }
 
